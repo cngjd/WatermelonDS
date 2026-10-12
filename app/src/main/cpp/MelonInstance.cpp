@@ -26,6 +26,7 @@
 #include "GPU3D_Vulkan.h"
 #include "MelonDS.h"
 #include "MelonInstance.h"
+#include "WideMelon.h"
 #include "ndz/NdzRomLoader.h"
 #include "NDS.h"
 #include "NDSCart.h"
@@ -3230,14 +3231,14 @@ u32 MelonInstance::runFrame(bool frameskipSolicitado)
     if (currentRenderer == Renderer::OpenGl)
     {
         int scale = static_cast<GLRenderer &>(nds->GPU.GetRenderer3D()).GetScaleFactor();
-        screenWidth = 256 * scale;
+        screenWidth = WideMelon::Width() * scale;
         screenHeight = (192 + 1) * scale;
     }
     else if (currentRenderer == Renderer::Compute)
     {
         auto computeRenderSettings = static_cast<ComputeRenderSettings&>(*currentConfiguration->renderSettings);
         int scale = computeRenderSettings.scale;
-        screenWidth = 256 * scale;
+        screenWidth = WideMelon::Width() * scale;
         screenHeight = (192 + 1) * scale;
     }
     else if (currentRenderer == Renderer::Vulkan)
@@ -7322,6 +7323,19 @@ void MelonInstance::updateRenderer()
     vulkanFrameskipUltimaEscala = 0;
     Renderer newRenderer = currentConfiguration->renderer;
     const bool fastForwardActive = isFastForwardActive();
+
+    // WideMelon projects geometry in the shared GPU3D core, so the width must be native (256) for every renderer that
+    // doesn't support it (Software, Vulkan). Only OpenGL and Compute get the configured width.
+    int desiredViewWidth = 256;
+    if (newRenderer == Renderer::OpenGl)
+        desiredViewWidth = static_cast<OpenGlRenderSettings&>(*currentConfiguration->renderSettings).viewWidth;
+    else if (newRenderer == Renderer::Compute)
+        desiredViewWidth = static_cast<ComputeRenderSettings&>(*currentConfiguration->renderSettings).viewWidth;
+    const int previousViewWidth = WideMelon::Width();
+    WideMelon::SetWidth(desiredViewWidth);
+    // Recreate GL/Compute renderers when the width changes so framebuffers and geometry agree
+    const bool widescreenChanged = WideMelon::Width() != previousViewWidth
+        && (newRenderer == Renderer::OpenGl || newRenderer == Renderer::Compute);
     const bool transitionTouchesVulkan =
         currentRenderer == Renderer::Vulkan || newRenderer == Renderer::Vulkan;
     std::unique_lock<std::mutex> frameTailTransitionBarrier;
@@ -7337,7 +7351,7 @@ void MelonInstance::updateRenderer()
             std::memory_order_acq_rel);
     }
 
-    if (newRenderer != currentRenderer)
+    if (newRenderer != currentRenderer || widescreenChanged)
     {
         vulkanRuntimeFailureHandled = false;
         openGlDebugSnapshotRequested.store(false, std::memory_order_release);

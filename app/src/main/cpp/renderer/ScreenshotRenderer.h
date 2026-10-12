@@ -36,6 +36,10 @@ private:
     void setupFrameBuffer();
     void setupShaders();
     void setupVertexBuffers();
+    void updateVertexBuffers(float u0, float u1);
+
+    // Left UV of the native 256 px region inside the frame texture (non-zero for WideMelon frames)
+    float currentCropU0 = -1.0f;
 
     std::mutex screenshotMutex;
     std::condition_variable screenshotCondition;
