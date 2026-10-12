@@ -1,0 +1,154 @@
+name: WatermelonDS Wide sync
+
+# Daily: rebase the WideMelon branches onto the latest SapphireRhodonite/WatermelonDS, build the release APK and
+# publish it. On a rebase conflict or a failed build/test nothing is pushed and an issue is opened instead.
+# Also opens an issue when manijose1919/widemelon-android has commits we haven't reviewed.
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Build and publish even if upstream has not changed'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: widemelon-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_APP_URL: https://github.com/SapphireRhodonite/WatermelonDS.git
+  UPSTREAM_APP_BRANCH: Develop
+  UPSTREAM_LIB_URL: https://github.com/SapphireRhodonite/melonDS-android-lib.git
+  WIDEMELON_ANDROID_URL: https://github.com/manijose1919/widemelon-android.git
+  APK_PATH: app/build/outputs/apk/gitHubProd/release/app-gitHub-prod-release.apk
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: widescreen
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Prepare git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C melonDS-android-lib fetch -q origin lib-widescreen
+
+      - name: Rebase onto upstream WatermelonDS
+        id: sync
+        run: bash scripts/widemelon-sync.sh
+
+      - uses: actions/setup-java@v4
+        if: steps.sync.outputs.changed == 'true' || inputs.force_build
+        with:
+          java-version: '21'
+          distribution: zulu
+          cache: gradle
+
+      - name: Setup Android SDK
+        if: steps.sync.outputs.changed == 'true' || inputs.force_build
+        uses: android-actions/setup-android@v3
+
+      - name: Build and test
+        if: steps.sync.outputs.changed == 'true' || inputs.force_build
+        env:
+          WIDE_KEYSTORE: ${{ secrets.WIDE_KEYSTORE }}
+          WIDE_KEYSTORE_PASSWORD: ${{ secrets.WIDE_KEYSTORE_PASSWORD }}
+        run: |
+          if [[ -z "$WIDE_KEYSTORE" ]]; then
+            echo "::error::WIDE_KEYSTORE secret missing: APKs must always be signed with the same key"
+            exit 1
+          fi
+          echo "$WIDE_KEYSTORE" | base64 -d > "$RUNNER_TEMP/wide.jks"
+          {
+            echo "MELONDS_KEYSTORE=$RUNNER_TEMP/wide.jks"
+            echo "MELONDS_KEYSTORE_PASSWORD=$WIDE_KEYSTORE_PASSWORD"
+            echo "MELONDS_KEY_ALIAS=melonds"
+            echo "MELONDS_KEY_PASSWORD=$WIDE_KEYSTORE_PASSWORD"
+          } >> local.properties
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:assembleGitHubProdRelease :app:testGitHubProdReleaseUnitTest -PmelonAbis=arm64-v8a
+          # The build regenerates Vulkan SPIR-V headers (as stock does); never commit them
+          git -C melonDS-android-lib checkout -- src
+
+      - name: Push rebased branches
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          git -C melonDS-android-lib push --force origin lib-widescreen
+          git push --force-with-lease origin widescreen
+
+      - name: Publish release
+        if: steps.sync.outputs.changed == 'true' || inputs.force_build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          upstream="${{ steps.sync.outputs.upstream }}"
+          version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' buildSrc/src/main/kotlin/AppConfig.kt)
+          tag="wide-$(date -u +%Y%m%d)-${upstream:0:8}"
+          cp "$APK_PATH" "WatermelonDS-Wide-${version}-${upstream:0:8}-arm64.apk"
+          gh release delete "$tag" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$tag" "WatermelonDS-Wide-${version}-${upstream:0:8}-arm64.apk" \
+            --target widescreen \
+            --title "WatermelonDS Wide ${version} (upstream ${upstream:0:8})" \
+            --notes "WideMelon widescreen build on top of SapphireRhodonite/WatermelonDS@${upstream}. Release build, arm64-v8a. Source: branch \`widescreen\` (submodule branch \`lib-widescreen\`)."
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Sync failed for upstream ${{ steps.sync.outputs.upstream }}"
+          if gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[].number' | grep -q .; then
+            exit 0
+          fi
+          gh issue create --title "$title" --body "The daily sync could not rebase, build or test against SapphireRhodonite/WatermelonDS@${{ steps.sync.outputs.upstream }}. Nothing was pushed or released.
+
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  widemelon-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: widescreen
+          sparse-checkout: .github
+
+      - name: Check for unreviewed widemelon-android commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reviewed=$(tr -d '[:space:]' < .github/widemelon-android-reviewed)
+          git init -q wm && cd wm
+          git fetch -q --filter=blob:none "$WIDEMELON_ANDROID_URL" HEAD
+          head=$(git rev-parse FETCH_HEAD)
+          if [[ "$head" == "$reviewed" ]]; then
+            echo "widemelon-android unchanged (${head:0:10})"
+            exit 0
+          fi
+          title="widemelon-android has new commits (${head:0:10})"
+          if gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[].number' | grep -q .; then
+            exit 0
+          fi
+          git fetch -q --filter=blob:none "$WIDEMELON_ANDROID_URL" "$reviewed" || true
+          log=$(git log --format='- %h %s' "$reviewed..$head" 2>/dev/null || git log -20 --format='- %h %s' "$head")
+          files=$(git diff --stat "$reviewed" "$head" -- melonDS-android-lib/src app/src/main 2>/dev/null | tail -40 || true)
+          gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "manijose1919/widemelon-android moved from \`${reviewed:0:10}\` to \`${head:0:10}\`. These changes are not ported automatically: review them and update \`.github/widemelon-android-reviewed\` when done.
+
+          Commits:
+          $log
+
+          Native/app files changed:
+          \`\`\`
+          $files
+          \`\`\`"
