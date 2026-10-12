@@ -44,6 +44,14 @@ public:
         melonDS::u32 outputAtlasWidth = 0;
         melonDS::u32 outputAtlasHeight = 0;
         melonDS::u32 outputBottomOffsetY = 0;
+        // WideMelon: the top screen can be wider than 256 DS px. The bottom screen is always the native 256 px in the
+        // middle of the atlas. At native width the top values equal the bottom ones and the offsets are 0.
+        melonDS::u32 wideWidth = 256;
+        melonDS::u32 inputTopScreenWidth = 0;
+        melonDS::u32 inputBottomOffsetX = 0;
+        melonDS::u32 sourceTopScreenWidth = 0;
+        melonDS::u32 outputTopScreenWidth = 0;
+        melonDS::u32 outputBottomOffsetX = 0;
         bool nativeDisplayMode = false;
         bool clamped = false;
     };
@@ -73,6 +81,7 @@ private:
     bool ensureResources(const Sizing& sizing);
     void logSizingIfNeeded(const Sizing& sizing, melonDS::u32 atlasWidth, melonDS::u32 atlasHeight);
     bool ensureImage(ImageResource& image, melonDS::u32 width, melonDS::u32 height, bool swapRedAndBlue);
+    void clearImage(const ImageResource& image);
     bool drawScreenInput(
         GLuint sourceTexture,
         melonDS::u32 srcX0, melonDS::u32 srcY0, melonDS::u32 srcX1, melonDS::u32 srcY1,
