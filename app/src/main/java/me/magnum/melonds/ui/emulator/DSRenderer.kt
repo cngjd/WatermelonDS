@@ -4,13 +4,13 @@ import android.content.Context
 import android.graphics.BitmapFactory
 import android.opengl.GLES30
 import android.opengl.GLUtils
+import me.magnum.melonds.common.opengl.ScreenTextureUVs
 import me.magnum.melonds.common.opengl.Shader
 import me.magnum.melonds.common.opengl.ShaderFactory
 import me.magnum.melonds.common.opengl.ShaderProgramSource
 import me.magnum.melonds.common.opengl.VideoFilterShaderProvider
 import me.magnum.melonds.domain.model.Rect
 import me.magnum.melonds.domain.model.RuntimeBackground
-import me.magnum.melonds.domain.model.SCREEN_HEIGHT
 import me.magnum.melonds.domain.model.VideoFiltering
 import me.magnum.melonds.domain.model.layout.BackgroundMode
 import me.magnum.melonds.domain.model.render.PresentFrameWrapper
@@ -168,26 +168,14 @@ class DSRenderer(private val context: Context) : EmulatorRenderer {
         //   3                         5
         // Texture is vertically flipped
 
-        // The texture will have 2 empty lines between the screens. Take that into account when computing UVs
-        val lineRelativeSize = 1f / (SCREEN_HEIGHT * 2 + 2).toFloat()
-
-        val topUvs = floatArrayOf(
-            0f, 0.5f - lineRelativeSize,
-            0f, 0f,
-            1f, 0f,
-            0f, 0.5f - lineRelativeSize,
-            1f, 0f,
-            1f, 0.5f - lineRelativeSize,
-        )
-
-        val bottomUvs = floatArrayOf(
-            0f, 1f,
-            0f, 0.5f + lineRelativeSize,
-            1f, 0.5f + lineRelativeSize,
-            0f, 1f,
-            1f, 0.5f + lineRelativeSize,
-            1f, 1f,
-        )
+        // The texture has 2 empty lines between the screens, and may be wider than 256 px with WideMelon
+        val widescreenViewWidth = rendererConfiguration?.widescreenViewWidth ?: 256
+        val topUvs = ScreenTextureUVs.topUvs()
+        val bottomUvs = ScreenTextureUVs.bottomUvs(widescreenViewWidth)
+        val hybridTopUvs = ScreenTextureUVs.topNativeUvs(widescreenViewWidth)
+        val topRect = topScreenRect?.let {
+            ScreenTextureUVs.widenTopScreenRect(it, widescreenViewWidth, width.toInt(), height.toInt())
+        }
 
         data class ScreenDrawTarget(
             val rect: Rect,
@@ -207,13 +195,13 @@ class DSRenderer(private val context: Context) : EmulatorRenderer {
         }
 
         if (bottomOnTop) {
-            topScreenRect?.let { addTarget(ScreenDrawTarget(it, topUvs, topAlpha, false)) }
+            topRect?.let { addTarget(ScreenDrawTarget(it, topUvs, topAlpha, false)) }
             bottomScreenRect?.let { addTarget(ScreenDrawTarget(it, bottomUvs, bottomAlpha, true)) }
         } else {
             bottomScreenRect?.let { addTarget(ScreenDrawTarget(it, bottomUvs, bottomAlpha, false)) }
-            topScreenRect?.let { addTarget(ScreenDrawTarget(it, topUvs, topAlpha, true)) }
+            topRect?.let { addTarget(ScreenDrawTarget(it, topUvs, topAlpha, true)) }
         }
-        hybridTopScreenRect?.let { addTarget(ScreenDrawTarget(it, topUvs, hybridAlpha, hybridOnTop)) }
+        hybridTopScreenRect?.let { addTarget(ScreenDrawTarget(it, hybridTopUvs, hybridAlpha, hybridOnTop)) }
         hybridBottomScreenRect?.let { addTarget(ScreenDrawTarget(it, bottomUvs, hybridAlpha, hybridOnTop)) }
 
         val screenVertexData = (underTargets + overTargets).flatMap {
@@ -257,7 +245,8 @@ class DSRenderer(private val context: Context) : EmulatorRenderer {
         screenShader?.delete()
 
         val filtering = rendererConfiguration?.videoFiltering ?: VideoFiltering.NONE
-        val shaderSource = VideoFilterShaderProvider.getShaderSource(filtering)
+        val textureWidth = rendererConfiguration?.widescreenViewWidth ?: 256
+        val shaderSource = VideoFilterShaderProvider.getShaderSource(filtering, textureWidth)
         screenShader = ShaderFactory.createShaderProgram(shaderSource)
     }
 
