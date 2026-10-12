@@ -120,39 +120,61 @@ jobs:
 
           Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-  widemelon-android:
+  watch-widescreen-sources:
+    # Widescreen sources are ported by hand: open an issue when they have commits we haven't reviewed
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: widemelon-android
+            repo: manijose1919/widemelon-android
+            reviewed: .github/widemelon-android-reviewed
+            paths: melonDS-android-lib/src app/src/main
+          - name: widemelon
+            repo: pruefsumme/widemelon
+            reviewed: .github/widemelon-reviewed
+            # Only its widescreen code: the repo also merges melonDS and has a phone-bridge frontend
+            paths: src/WideMelon.h src/GPU.cpp src/GPU3D.cpp src/GPU3D_OpenGL.cpp src/GPU_OpenGL.cpp src/OpenGL_shaders src/frontend/qt_sdl/WideMelonSetup.cpp
     steps:
       - uses: actions/checkout@v4
         with:
           ref: widescreen
           sparse-checkout: .github
 
-      - name: Check for unreviewed widemelon-android commits
+      - name: Check ${{ matrix.name }} for unreviewed commits
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE_REPO: ${{ matrix.repo }}
+          SOURCE_PATHS: ${{ matrix.paths }}
         run: |
-          reviewed=$(tr -d '[:space:]' < .github/widemelon-android-reviewed)
-          git init -q wm && cd wm
-          git fetch -q --filter=blob:none "$WIDEMELON_ANDROID_URL" HEAD
+          reviewed=$(tr -d '[:space:]' < "${{ matrix.reviewed }}")
+          git init -q src && cd src
+          git fetch -q "https://github.com/$SOURCE_REPO.git" HEAD
           head=$(git rev-parse FETCH_HEAD)
-          if [[ "$head" == "$reviewed" ]]; then
-            echo "widemelon-android unchanged (${head:0:10})"
+          git fetch -q "https://github.com/$SOURCE_REPO.git" "$reviewed" || true
+          # shellcheck disable=SC2086
+          if git cat-file -e "$reviewed^{commit}" 2>/dev/null; then
+            log=$(git log --format='- %h %ad %s' --date=short "$reviewed..$head" -- $SOURCE_PATHS)
+          else
+            log=$(git log -20 --format='- %h %ad %s' --date=short "$head" -- $SOURCE_PATHS)
+          fi
+          if [[ -z "$log" ]]; then
+            echo "$SOURCE_REPO: no new widescreen commits since ${reviewed:0:10}"
             exit 0
           fi
-          title="widemelon-android has new commits (${head:0:10})"
+          latest=$(git log -1 --format=%h "$head" -- $SOURCE_PATHS)
+          title="$SOURCE_REPO has new widescreen commits ($latest)"
           if gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[].number' | grep -q .; then
             exit 0
           fi
-          git fetch -q --filter=blob:none "$WIDEMELON_ANDROID_URL" "$reviewed" || true
-          log=$(git log --format='- %h %s' "$reviewed..$head" 2>/dev/null || git log -20 --format='- %h %s' "$head")
-          files=$(git diff --stat "$reviewed" "$head" -- melonDS-android-lib/src app/src/main 2>/dev/null | tail -40 || true)
-          gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "manijose1919/widemelon-android moved from \`${reviewed:0:10}\` to \`${head:0:10}\`. These changes are not ported automatically: review them and update \`.github/widemelon-android-reviewed\` when done.
+          files=$(git diff --stat "$reviewed" "$head" -- $SOURCE_PATHS 2>/dev/null | tail -40 || true)
+          gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "$SOURCE_REPO has commits touching its widescreen code since \`${reviewed:0:10}\`. They are not ported automatically: review them, port what's worth it, then update \`${{ matrix.reviewed }}\` to \`$head\`.
 
           Commits:
           $log
 
-          Native/app files changed:
+          Files:
           \`\`\`
           $files
           \`\`\`"
