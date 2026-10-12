@@ -1,116 +1,136 @@
-# WatermelonDS
+# WatermelonDS Wide
 
-> **WatermelonDS Wide**: this branch adds the WideMelon widescreen 3D view. See [docs/WIDEMELON.md](docs/WIDEMELON.md).
+**WatermelonDS + WideMelon widescreen 3D**, built for the AYN Thor's dual screens.
 
-A Nintendo DS and DSi emulator for Android, built on top of [melonDS](https://melonds.kuribo64.net/) and the
-[melonDS Android port](https://github.com/rafaelvcaetano/melonDS-android) by rafaelvcaetano.
+> [!WARNING]
+> **Personal project, for my own use only. Use at your own risk.**
+> This build was developed **entirely by AI** (Claude Code): the port, the CI and this README. It has only been
+> tested by me, on my own device, with a handful of games. There is no support, no guarantee it works for you, and it
+> may break saves, settings or anything else. Back up your data first.
+>
+> It is **not** affiliated with or endorsed by WatermelonDS, melonDS, melonDS Android, WideMelon or widemelon-android.
+> Please don't report issues from this build to those projects. For a supported emulator, use
+> [WatermelonDS](https://github.com/SapphireRhodonite/WatermelonDS) or
+> [melonDS Android](https://github.com/rafaelvcaetano/melonDS-android).
 
-WatermelonDS is a fork that keeps up with upstream while adding RetroAchievements (including offline play), a Vulkan
-renderer, RetroArch shader presets and full external display support, wrapped in its own visual identity.
+## What it is
 
+[WatermelonDS](https://github.com/SapphireRhodonite/WatermelonDS) (a melonDS Android fork with dual-screen / external
+display support, RetroAchievements, Vulkan and RetroArch shader presets) with the **WideMelon** widescreen 3D view
+from [widemelon-android](https://github.com/manijose1919/widemelon-android) ported on top. The main target is
+Pokémon Black 2 / White 2 on the AYN Thor with the **"Internal: Top, External: Bottom"** dual-screen preset.
 
+- The top screen's **3D** is rendered wider (even widths 256–768); 2D, menus and the touchscreen stay native
+  256×192 in the middle.
+- The wide top screen shows on whichever display shows the DS top screen; the bottom screen stays 4:3 and touch
+  mapping is unchanged.
+- Renderers: **OpenGL** and **Compute**. Software and **Vulkan** (incl. FastPath) always run at native 4:3; the
+  setting is hidden for them.
+- Built-in filters and RetroArch shader presets (OpenGL/Compute) work at any width.
+- App ID `com.sapphire.watermelonds.wide`, name "WatermelonDS Wide": installs next to stock WatermelonDS and other
+  melonDS builds.
 
-[<img src="https://raw.githubusercontent.com/Kunzisoft/Github-badge/main/get-it-on-github.png" alt="Get it on GitHub" height="80">](https://github.com/SapphireRhodonite/melonDS-android/releases/latest)
+Everything else is stock WatermelonDS; see [its README](https://github.com/SapphireRhodonite/WatermelonDS#readme).
 
-<p align="center">
-   <img width="450" height="400" alt="WaterMelon1" src="https://github.com/user-attachments/assets/187ea254-877e-4efd-a8dd-93a6023684ad" />
-   <img width="450" height="400" alt="WaterMelon1" src="https://github.com/user-attachments/assets/01e82877-a138-44a3-bc71-c24d48cabab6" />
-   <img width="450" height="400" alt="WaterMelon1" src="https://github.com/user-attachments/assets/27868058-ce89-470d-afac-b812dea5d1de" />
-</p>
+## Install
 
+Download the APK from [Releases](../../releases/latest) (arm64-v8a, release build) and install it, or:
 
-# What WatermelonDS adds
-Everything from the upstream Android port, plus:
+```sh
+adb install -r WatermelonDS-Wide-*.apk
+```
 
-### RetroAchievements
-*  Achievements, leaderboards and Hardcore mode, with a shared card style for the in-game popups
-*  Your profile and score are shown on load and in the settings screen
-*  **Offline play**: unlocks earned without a connection are stored and submitted later. Two providers are available
-   the one built into WatermelonDS, or [RAOfflineProxy](https://github.com/SapphireRhodonite) if you prefer to run it
-   yourself. Note that RAOfflineProxy does not support Hardcore mode
-*  Achievements can be disabled without logging out, and sessions start even for games that have no achievement set
+Releases are signed with this project's own key, so they update each other but not a build signed differently
+(uninstall that one first, after backing up your saves).
 
-### Renderers
-*  Software, OpenGL, Vulkan and compute renderers, with internal resolution scaling
-*  Vulkan gained a *fastpath* presentation profile, optimized texture uploads and dynamic scissor clipping
-*  **RetroArch shader presets** on every renderer, through [librashader](https://github.com/SnowflakePowered/librashader)
-*  Adrenotools driver support on the `gitHub` flavor, for custom Adreno drivers
+## Using it
 
-### External displays
-*  Play on a second screen (TV, dock, devices such as the Odin 2), with the touch screen still usable on the handheld
-*  Per-ROM external screen and layout settings, screen rotation, backgrounds, video filtering and aspect ratio control
-*  Achievements are shown on the external display while you browse your ROM list
+Settings → Video → Renderer **OpenGL** or **Compute** → **Widescreen 3D view (WideMelon)**:
 
-### Library and layouts
-*  DSiWare titles in the ROM list, box art on the "continue" shelf, and custom ROM names
-*  Layout editor with screen transparency, aspect ratio options and separate centering controls
-*  Settings backup and restore (requires a restart to apply), with internal and external layouts backed up separately
-*  Alternate input bindings and a hold-to-fast-forward button
+| Value | Aspect | Notes |
+|-------|--------|-------|
+| Off (256) | 4:3 | Stock behaviour |
+| 320 | 5:3 | widemelon-android "Performance" preset width |
+| **342** | **16:9** | Exact fit for the Thor's 1920×1080 top display |
+| 384 | 2:1 | widemelon-android default / "Balanced" / "Quality" width |
+| 448 – 768 | 7:3 – 4:1 | 512 is widemelon-android's "Max wide" width |
 
-The core is kept in sync with melonDS 1.0 and later upstream changes.
+Like renderer and internal resolution, it can't be changed in-game: change it from the main settings and (re)start
+the game. GPU cost grows with width × internal resolution: if 342 at 4× drops frames, try 3× (about the cost of
+4:3 at 4×) or the Compute renderer.
 
-# Missing Features
-*  Local Multiplayer
-*  DSi SD card support
-*  Customizable button skins
+Known limitations (game logic, not bugs): objects outside the original field of view may pop in at the screen edges
+(B2W2 overworld), and scenes that are 2D or that the game renders at 4:3 (battles, menus) stay 4:3 with black side
+bars. RetroAchievements hardcore mode may reject this modified build.
 
-# Performance
-Performance is solid on 64 bit devices with thread rendering and JIT enabled, and should run at full speed on flagship
-devices. Performance on older devices, specially 32 bit devices, is very poor due to the lack of JIT support.
+## Building from source (macOS)
 
-# Integration with third-party frontends
-It's possible to launch WatermelonDS from third party frontends. For that, you will need to have the ROMs you want to
-launch already scanned by WatermelonDS. Then, you can configure your third-party frontend with the following
-configuration:
-*  Package name: `me.magnum.melondualds` (nightly builds use `me.magnum.melondualds.nightly`)
-*  Activity name: `me.magnum.melonds.ui.emulator.EmulatorActivity`
-*  Parameters (choose one):
-    * Intent data (preferred) - a URI of the NDS ROM (ZIP and 7z files are supported). Ensure [read permission is granted](https://developer.android.com/reference/android/content/Intent#FLAG_GRANT_READ_URI_PERMISSION)
-    * `uri` (deprecated) - a string with the [SAF](https://developer.android.com/guide/topics/providers/create-document-provider) URI of the NDS ROM (ZIP and 7z files are supported)
-    * `PATH` (deprecated) - a string with the absolute path to the NDS ROM (ZIP and 7z files are supported)
+Toolchain (versions from `buildSrc/src/main/kotlin/AppConfig.kt` and `app/build.gradle.kts`): JDK 21, Android SDK 36,
+NDK `28.0.13004108`, CMake `3.22.1`, Rust stable with the Android targets (librashader is built from source).
+Gradle 9.5 comes with the wrapper.
 
+```sh
+brew install openjdk@21 rustup
+brew install --cask android-commandlinetools
+export JAVA_HOME=/opt/homebrew/opt/openjdk@21
+export PATH="$JAVA_HOME/bin:/opt/homebrew/opt/rustup/bin:$PATH"
+export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+rustup default stable
+yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses
+sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.0.13004108" "cmake;3.22.1"
 
-### Info regarding save files
-When launching ROMs from third-party frontends, if WatermelonDS hasn't scanned that particular ROM previously, it won't
-be able to create the save file next to the ROM file if the option "Save next to ROM file" is enabled in the settings or
-the save file directory is not set. Instead, WatermelonDS will create a save file in
-`Android/data/me.magnum.melondualds/files/saves`
+git clone --recurse-submodules -b widescreen https://github.com/cngjd/WatermelonDS.git
+cd WatermelonDS
+echo "sdk.dir=$ANDROID_HOME" > local.properties
+./gradlew :app:assembleGitHubProdRelease -PmelonAbis=arm64-v8a
+```
 
-# Releases
+The APK is written to `app/build/outputs/apk/gitHubProd/release/app-gitHub-prod-release.apk`.
 
-Builds are published [here](https://github.com/SapphireRhodonite/melonDS-android/releases). Release candidates are
-marked as pre-releases; they can contain more bugs than usual and you may need to clear your app data to get them to
-work properly after an update.
+- `-PmelonAbis=arm64-v8a` only builds the ABI the Thor needs (omit it to build all three).
+- Use the **release** variant for playing. Without a keystore in `local.properties` (`MELONDS_KEYSTORE`,
+  `MELONDS_KEYSTORE_PASSWORD`, `MELONDS_KEY_ALIAS`, `MELONDS_KEY_PASSWORD`) it is signed with the debug key. The
+  debug variant compiles the native emulator unoptimized and is much slower.
+- The build regenerates the Vulkan SPIR-V headers in `melonDS-android-lib` (same as stock WatermelonDS), which can
+  leave those generated files modified in the submodule.
 
-# Building
-To build the project you will need the Android SDK, NDK, CMake, a JDK 21 toolchain and a Rust toolchain
-(`cargo` and `rustup`), which is used to build librashader for each ABI.
+## Staying up to date
 
-## Build steps:
-1.  Clone the project, including submodules with:
-    
-    `git clone --recurse-submodules https://github.com/SapphireRhodonite/melonDS-android.git`
-2.  Install the Android SDK, NDK (`28.0.13004108`) and CMake
-3.  Install Rust with [rustup](https://rustup.rs/). If Android Studio does not inherit your shell `PATH`, set the
-    `CARGO` and `RUSTUP` environment variables to the executable paths
-4.  Build with:
-    1.  Unix: `./gradlew :app:assembleGitHubProdDebug`
-    2.  Windows: `gradlew.bat :app:assembleGitHubProdDebug`
-5.  The generated APK can be found at `app/build/outputs/apk/gitHubProd/debug`
+The `widemelon-sync` GitHub workflow (daily, or manually from the Actions tab) rebases the `widescreen` branch onto
+the latest SapphireRhodonite/WatermelonDS `Develop`, and the `lib-widescreen` branch (melonDS-android-lib WideMelon
+commits, stored in this same repository) onto the lib commit upstream pins. It then builds the release APK signed with
+the key from the `WIDE_KEYSTORE`/`WIDE_KEYSTORE_PASSWORD` secrets, runs the unit tests, pushes both branches and
+publishes a release. On a conflict or a failure nothing is pushed and an issue is opened. It also opens an issue when
+widemelon-android has commits newer than `.github/widemelon-android-reviewed`. The same rebase can be run locally
+with `scripts/widemelon-sync.sh`.
 
-There are two flavor dimensions, so build tasks combine both: `gitHub` or `playStore` (the former enables adrenotools)
-and `prod` or `nightly`. For example, `:app:assembleGitHubNightlyDebug` or `:app:assembleGitHubProdRelease`.
+## What changed compared to WatermelonDS
 
-If you want to create a release build, you will need to modify your `local.properties` file to include the following fields:  
-*  `MELONDS_KEYSTORE=<path_to_your_keystore>`
-*  `MELONDS_KEYSTORE_PASSWORD=<keystore_password>`
-*  `MELONDS_KEY_ALIAS=<name_of_your_key_alias>`
-*  `MELONDS_KEY_PASSWORD=<key_alias_password>`
+Native core (`melonDS-android-lib`, branch `lib-widescreen`): `WideMelon.h` (width + projection helpers),
+`GPU3D.cpp` (X projection in `SubmitVertex`/`BoxTest`), OpenGL and Compute renderers (wide framebuffer, X mapping,
+centered display capture), GL compositor (top-screen wings, bottom side columns black).
 
-# Credits
-*  [melonDS](https://github.com/melonDS-emu/melonDS) by Arisotura and contributors — the emulator core
-*  [melonDS Android](https://github.com/rafaelvcaetano/melonDS-android) by rafaelvcaetano
-*  [librashader](https://github.com/SnowflakePowered/librashader) — RetroArch shader preset support
-*  [rcheevos](https://github.com/RetroAchievements/rcheevos) — RetroAchievements support
-*  [WideMelon](https://github.com/pruefsumme/widemelon) by pruefsumme — widescreen 3D projection/compositing (WatermelonDS Wide)
-*  [widemelon-android](https://github.com/manijose1919/widemelon-android) by manijose1919 — Android WideMelon port this build adapts
+App: width setting → `RendererConfiguration.effectiveWidescreenViewWidth` → JNI → `MelonInstance`
+(`WideMelon::SetWidth`, forced to 256 for Software/Vulkan, renderer recreated on change); `ScreenTextureUVs` +
+`DSRenderer` / `ExternalLayoutRender` / `ExternalScreenRender` (wide top rect, cropped bottom); width-aware built-in
+filters; width-aware `OpenGlRetroArchFilter`; savestate thumbnails cropped to native 256. Save and savestate formats
+are unchanged. RetroAchievements code is untouched.
+
+## Credits
+
+This build only exists thanks to:
+
+- [melonDS](https://github.com/melonDS-emu/melonDS) by Arisotura and contributors: the emulator core
+- [melonDS Android](https://github.com/rafaelvcaetano/melonDS-android) by rafaelvcaetano: the Android port
+- [WatermelonDS](https://github.com/SapphireRhodonite/WatermelonDS) by SapphireRhodonite and contributors: the base
+  of this build (dual-screen / external display support, RetroAchievements, Vulkan, RetroArch presets)
+- [WideMelon](https://github.com/pruefsumme/widemelon) by pruefsumme: the widescreen projection/compositing approach
+- [widemelon-android](https://github.com/manijose1919/widemelon-android) by manijose1919: the Android WideMelon port
+  this build adapts
+- [librashader](https://github.com/SnowflakePowered/librashader): RetroArch shader preset support
+- [rcheevos](https://github.com/RetroAchievements/rcheevos): RetroAchievements support
+
+## License
+
+GPL-3.0-or-later, like everything it is built from (see [LICENSE](LICENSE)). The full source of every release is in
+this repository (`widescreen` and `lib-widescreen` branches).

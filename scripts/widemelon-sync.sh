@@ -31,6 +31,14 @@ if [[ "$(git -C "$LIB_DIR" rev-parse --show-toplevel 2>/dev/null)" != "$(pwd -P)
     exit 1
 fi
 
+# Our README replaces upstream's: when replaying our commits, always keep their version instead of conflicting
+git config merge.keep-wide-readme.name "Keep the WatermelonDS Wide README"
+git config merge.keep-wide-readme.driver 'cp %B %A'
+attributes_file="$(git rev-parse --git-path info/attributes)"
+mkdir -p "$(dirname "$attributes_file")"
+grep -qx 'README.md merge=keep-wide-readme' "$attributes_file" 2>/dev/null \
+    || echo 'README.md merge=keep-wide-readme' >> "$attributes_file"
+
 git checkout -q "$APP_BRANCH"
 git fetch -q --no-tags --no-recurse-submodules "$UPSTREAM_APP_URL" "$UPSTREAM_APP_BRANCH"
 upstream=$(git rev-parse FETCH_HEAD)
