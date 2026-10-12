@@ -69,7 +69,9 @@ android {
         getByName("release") {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("release")
+            // Without a configured keystore, sign with the debug key so optimized builds can still be sideloaded
+            val hasReleaseKeystore = gradleLocalProperties(rootDir, providers)["MELONDS_KEYSTORE"] != null
+            signingConfig = signingConfigs.getByName(if (hasReleaseKeystore) "release" else "debug")
             externalNativeBuild {
                 cmake {
                     arguments("-DMELONDS_ANDROID_DEBUG_BUILD=0")
