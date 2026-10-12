@@ -26,8 +26,13 @@ output() {
     fi
 }
 
+if [[ "$(git -C "$LIB_DIR" rev-parse --show-toplevel 2>/dev/null)" != "$(pwd -P)/$LIB_DIR" ]]; then
+    echo "::error::${LIB_DIR} is not an initialised submodule checkout" >&2
+    exit 1
+fi
+
 git checkout -q "$APP_BRANCH"
-git fetch -q --no-tags "$UPSTREAM_APP_URL" "$UPSTREAM_APP_BRANCH"
+git fetch -q --no-tags --no-recurse-submodules "$UPSTREAM_APP_URL" "$UPSTREAM_APP_BRANCH"
 upstream=$(git rev-parse FETCH_HEAD)
 output upstream "$upstream"
 
@@ -48,8 +53,8 @@ echo "Upstream ${old_base:0:10} -> ${upstream:0:10}, lib ${old_lib_base:0:10} ->
 # 1. Lib: replay our lib commits (old_lib_base..current_lib) onto the lib commit upstream now pins
 (
     cd "$LIB_DIR"
-    git fetch -q --no-tags "$UPSTREAM_LIB_URL" "$new_lib_base" 2>/dev/null \
-        || git fetch -q --no-tags "$UPSTREAM_LIB_URL"
+    git fetch -q --no-tags --no-recurse-submodules "$UPSTREAM_LIB_URL" "$new_lib_base" 2>/dev/null \
+        || git fetch -q --no-tags --no-recurse-submodules "$UPSTREAM_LIB_URL"
     git checkout -q --detach "$current_lib"
     if [[ "$old_lib_base" != "$new_lib_base" ]]; then
         if ! git rebase -q --onto "$new_lib_base" "$old_lib_base"; then
