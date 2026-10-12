@@ -1,4 +1,7 @@
 # WatermelonDS
+
+> **WatermelonDS Wide**: this branch adds the WideMelon widescreen 3D view. See [docs/WIDEMELON.md](docs/WIDEMELON.md).
+
 A Nintendo DS and DSi emulator for Android, built on top of [melonDS](https://melonds.kuribo64.net/) and the
 [melonDS Android port](https://github.com/rafaelvcaetano/melonDS-android) by rafaelvcaetano.
 
@@ -18,9 +21,6 @@ renderer, RetroArch shader presets and full external display support, wrapped in
 
 # What WatermelonDS adds
 Everything from the upstream Android port, plus:
-
-### Local Multiplayer:
-* Local DS multiplayer over Wi-Fi Direct, including Download Play, PictoChat, and cross-play with SeedlessDS. [Setup guide](https://github.com/SapphireRhodonite/WatermelonDS/releases/tag/0.8.0.rc4#set-up-your-first-multiplayer-room)
 
 ### RetroAchievements
 *  Achievements, leaderboards and Hardcore mode, with a shared card style for the in-game popups
@@ -50,6 +50,7 @@ Everything from the upstream Android port, plus:
 The core is kept in sync with melonDS 1.0 and later upstream changes.
 
 # Missing Features
+*  Local Multiplayer
 *  DSi SD card support
 *  Customizable button skins
 
@@ -111,3 +112,5 @@ If you want to create a release build, you will need to modify your `local.prope
 *  [melonDS Android](https://github.com/rafaelvcaetano/melonDS-android) by rafaelvcaetano
 *  [librashader](https://github.com/SnowflakePowered/librashader) — RetroArch shader preset support
 *  [rcheevos](https://github.com/RetroAchievements/rcheevos) — RetroAchievements support
+*  [WideMelon](https://github.com/pruefsumme/widemelon) by pruefsumme — widescreen 3D projection/compositing (WatermelonDS Wide)
+*  [widemelon-android](https://github.com/manijose1919/widemelon-android) by manijose1919 — Android WideMelon port this build adapts
