@@ -116,7 +116,9 @@ android {
         create("gitHub") {
             dimension = "version"
             isDefault = true
-            signingConfig = signingConfigs.getByName("release")
+            // Without a configured keystore, sign with the debug key so optimized release builds can still be sideloaded
+            val hasReleaseKeystore = gradleLocalProperties(rootDir, providers)["MELONDS_KEYSTORE"] != null
+            signingConfig = signingConfigs.getByName(if (hasReleaseKeystore) "release" else "debug")
             resValue("bool", "adrenotools_enabled", "true")
             externalNativeBuild {
                 cmake {
