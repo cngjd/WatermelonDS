@@ -51,14 +51,16 @@ sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-36" "bui
 git clone --recurse-submodules -b widescreen <this repository> WatermelonDS
 cd WatermelonDS
 echo "sdk.dir=$ANDROID_HOME" > local.properties
-./gradlew :app:assembleGitHubProdDebug -PmelonAbis=arm64-v8a
+./gradlew :app:assembleGitHubProdRelease -PmelonAbis=arm64-v8a
 ```
 
-`-PmelonAbis=arm64-v8a` only builds the ABI the Thor needs (omit it to build all three).
-The APK is written to `app/build/outputs/apk/gitHubProd/debug/app-gitHub-prod-debug.apk`:
+`-PmelonAbis=arm64-v8a` only builds the ABI the Thor needs (omit it to build all three). Use the **release**
+variant for playing: without a keystore in `local.properties` it is signed with the debug key. The debug variant
+compiles the native emulator unoptimized and is much slower.
+The APK is written to `app/build/outputs/apk/gitHubProd/release/app-gitHub-prod-release.apk`:
 
 ```sh
-adb install -r app/build/outputs/apk/gitHubProd/debug/app-gitHub-prod-debug.apk
+adb install -r app/build/outputs/apk/gitHubProd/release/app-gitHub-prod-release.apk
 ```
 
 The build regenerates the Vulkan SPIR-V headers in `melonDS-android-lib` (`regenerateVulkanSpirv`,
