@@ -48,7 +48,7 @@ rustup default stable
 yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses
 sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.0.13004108" "cmake;3.22.1"
 
-git clone --recurse-submodules -b widescreen <this repository> WatermelonDS
+git clone --recurse-submodules -b widescreen https://github.com/cngjd/WatermelonDS.git
 cd WatermelonDS
 echo "sdk.dir=$ANDROID_HOME" > local.properties
 ./gradlew :app:assembleGitHubProdRelease -PmelonAbis=arm64-v8a
@@ -65,6 +65,16 @@ adb install -r app/build/outputs/apk/gitHubProd/release/app-gitHub-prod-release.
 
 The build regenerates the Vulkan SPIR-V headers in `melonDS-android-lib` (`regenerateVulkanSpirv`,
 same as stock WatermelonDS), which can leave those generated files modified in the submodule.
+
+## Staying up to date
+
+The `widemelon-sync` GitHub workflow (daily, or manually from the Actions tab) rebases the `widescreen` branch
+onto the latest SapphireRhodonite/WatermelonDS `Develop`, and the `lib-widescreen` branch (melonDS-android-lib
+WideMelon commits, stored in this same repository) onto the lib commit upstream pins. It then builds the release APK
+signed with the fixed key from the `WIDE_KEYSTORE`/`WIDE_KEYSTORE_PASSWORD` secrets, runs the unit tests, pushes
+both branches and publishes a GitHub release. On a conflict or a failure nothing is pushed and an issue is opened.
+It also opens an issue when manijose1919/widemelon-android has commits newer than
+`.github/widemelon-android-reviewed`. The same rebase can be run locally with `scripts/widemelon-sync.sh`.
 
 ## What changed (for maintainers)
 
