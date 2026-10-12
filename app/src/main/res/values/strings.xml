@@ -412,6 +412,8 @@
     <string name="category_video_summary">Filter, threaded rendering, FPS counter</string>
     <string name="filter">Filter</string>
     <string name="internal_resolution">Internal resolution</string>
+    <string name="widescreen_view_width">Widescreen 3D view (WideMelon)</string>
+    <string name="widescreen_view_width_summary">%s\nWidens the top screen\'s 3D only; 2D, menus and the touchscreen stay native. OpenGL and Compute only. Game-dependent: expect pop-in at the edges.</string>
     <string name="renderer">Renderer</string>
     <string name="dsi_camera_source">DSi camera source</string>
     <string name="external_screen_layout">External screen layout</string>

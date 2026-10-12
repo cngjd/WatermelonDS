@@ -27,6 +27,7 @@ import me.magnum.melonds.R
 import me.magnum.melonds.common.DirectoryAccessValidator
 import me.magnum.melonds.common.UriPermissionManager
 import me.magnum.melonds.domain.model.VideoRenderer
+import me.magnum.melonds.domain.model.WideMelon
 import me.magnum.melonds.domain.model.VideoFiltering
 import me.magnum.melonds.domain.model.DualScreenPreset
 import me.magnum.melonds.domain.model.ScreenAlignment
@@ -105,6 +106,7 @@ class VideoPreferencesFragment : BasePreferenceFragment(), PreferenceFragmentTit
 
     private val threadedRendererPreferences = mutableListOf<Preference>()
     private val highResRendererPreferences = mutableListOf<Preference>()
+    private var widescreenPreference: Preference? = null
     private val rendererDebugPreferences = mutableListOf<Preference>()
     private val coverageFixPreferences = mutableListOf<Preference>()
 
@@ -146,7 +148,9 @@ class VideoPreferencesFragment : BasePreferenceFragment(), PreferenceFragmentTit
         val launchedInGame = requireActivity().intent.getBooleanExtra(SettingsActivity.KEY_IN_GAME, false)
         val rendererPreference = findPreference<InGameLockedListPreference>("video_renderer")!!
         val internalResolutionPreference = findPreference<InGameLockedListPreference>("video_internal_resolution")!!
-        listOf(rendererPreference, internalResolutionPreference).forEach {
+        val widescreenViewWidthPreference = findPreference<InGameLockedListPreference>("video_widescreen_view_width")!!
+        widescreenPreference = widescreenViewWidthPreference
+        listOf(rendererPreference, internalResolutionPreference, widescreenViewWidthPreference).forEach {
             it.isInGameLocked = launchedInGame
             it.inGameLockedMessageRes = R.string.video_setting_cannot_change_ingame
         }
@@ -959,6 +963,8 @@ class VideoPreferencesFragment : BasePreferenceFragment(), PreferenceFragmentTit
                 }
             }
         }
+        // WideMelon only works with OpenGL and Compute. Vulkan and Software always render at native width
+        widescreenPreference?.isVisible = WideMelon.isSupportedBy(newRenderer)
 
         refreshConditionalVideoVisibility()
 
