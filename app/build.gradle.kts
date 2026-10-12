@@ -10,6 +10,14 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// Optional: -PmelonAbis=arm64-v8a builds only the listed ABIs (native code and librashader). Defaults to all of them.
+val buildAbis: List<String> = (project.findProperty("melonAbis") as String?)
+    ?.split(',')
+    ?.map(String::trim)
+    ?.filter(String::isNotEmpty)
+    ?.takeIf(List<String>::isNotEmpty)
+    ?: listOf("armeabi-v7a", "arm64-v8a", "x86_64")
+
 data class LibrashaderAbiTarget(
     val abi: String,
     val rustTarget: String,
@@ -34,7 +42,8 @@ android {
     compileSdk = AppConfig.compileSdkVersion
     ndkVersion = AppConfig.ndkVersion
     defaultConfig {
-        applicationId = "me.magnum.melondualds"
+        // WideMelon build: distinct ID so it installs next to stock WatermelonDS and other melonDS builds
+        applicationId = "com.sapphire.watermelonds.wide"
         minSdk = AppConfig.minSdkVersion
         targetSdk = AppConfig.targetSdkVersion
         versionCode = AppConfig.versionCode
@@ -42,7 +51,7 @@ android {
         manifestPlaceholders["appName"] = "@string/app_name"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
-            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86_64"))
+            abiFilters.addAll(buildAbis)
         }
         externalNativeBuild {
             cmake {
@@ -134,7 +143,7 @@ android {
 androidComponents {
     onVariants(selector().withName("gitHubProdDebug")) { variant ->
         // Keep prod-debug distinct from other debug/release variants.
-        variant.manifestPlaceholders.put("appName", "debug WatermelonDS")
+        variant.manifestPlaceholders.put("appName", "WatermelonDS Wide")
         variant.sources.res?.addStaticSourceDirectory("src/nightly/res")
     }
 }
@@ -248,7 +257,7 @@ val librashaderAbiTargets = listOf(
         ndkLibTriple = "x86_64-linux-android",
         clangPrefix = "x86_64-linux-android",
     ),
-)
+).filter { it.abi in buildAbis }
 
 fun librashaderToolSearchDirs(): List<File> {
     val pathDirs = System.getenv("PATH")
