@@ -91,12 +91,23 @@ void main()
 
     if (wing)
     {
-        // Top-screen side columns: reveal expanded 3D only (no 2D HUD)
-        if (_3dpixWide.a > 0)
+        // Top-screen side columns: reveal expanded 3D only (no 2D HUD), and only when this line is a real 3D scene
+        // (flag set by the 2D renderer, as in pruefsumme/widemelon). Otherwise (2D screens, forced blank, engine A
+        // on the bottom screen) the wings stay black.
+        bool wideScene = (mbright.b & 0x10) != 0;
+        if (wideScene && _3dpixWide.a > 0)
+        {
             pixel = _3dpixWide;
+
+            // BG0 brightness fade (BLDCNT effect 2/3 with BG0 as 1st target), so fades cover the wings too
+            int effect = (mbright.r >> 5) & 0x3;
+            int evy = mbright.g & 0x1F;
+            if      (effect == 2) pixel += (((0x3F - pixel) * evy) + 0x8) >> 4;
+            else if (effect == 3) pixel -= ((pixel * evy) + 0x7) >> 4;
+        }
         else
             pixel = ivec4(0);
-        dispmode = 1; // apply brightness below using mbright from center scanline
+        dispmode = wideScene ? 1 : 0; // master brightness below, from this scanline
     }
     else if (outOfNative)
     {

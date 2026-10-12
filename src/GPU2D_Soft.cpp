@@ -22,6 +22,7 @@
 #include "NDS.h"
 #include "Platform.h"
 #include "VulkanPerfStats.h"
+#include "WideMelon.h"
 
 #include <algorithm>
 #include <array>
@@ -7886,7 +7887,26 @@ void SoftRenderer::DrawScanlineActivePipeline(u32 line, Unit* unit)
             }
         }
 
-        dst[256*3] = masterBrightness |
+        u32 lineMasterBrightness = masterBrightness;
+        if (WideMelon::Enabled() && CurUnit->Num == 0)
+        {
+            // WideMelon (as in pruefsumme/widemelon): the compositor only fills the widescreen wings when this line is
+            // a real 3D scene (display mode 1, BG0 shown and 3D, engine enabled; forced blank lines never get here),
+            // and applies BG0's brightness fade to them. Packed into master brightness bits the compositor ignores:
+            // bit 20 = wide scene, bits 5-6 = BLDCNT effect when BG0 is a 1st target, bits 8-12 = EVY.
+            constexpr u32 kMetaFlagWideScene = 1u << 20u;
+            const bool wideScene = CurUnit->Enabled && (CurUnit->DispCnt & 0x30108) == 0x10108;
+            lineMasterBrightness &= 0xC01Fu;
+            if (wideScene)
+            {
+                const u32 effect = (CurUnit->BlendCnt & 0x1) ? ((CurUnit->BlendCnt >> 6) & 0x3) : 0u;
+                const u32 evy = std::min<u32>(CurUnit->EVY, 16u);
+                rendererMetaFlags |= kMetaFlagWideScene;
+                lineMasterBrightness |= (effect << 5) | (evy << 8);
+            }
+        }
+
+        dst[256*3] = lineMasterBrightness |
                      (CurUnit->DispCnt & 0x30000) |
                      rendererMetaFlags |
                      (xpos << 24) | ((xpos & 0x100) << 15);
