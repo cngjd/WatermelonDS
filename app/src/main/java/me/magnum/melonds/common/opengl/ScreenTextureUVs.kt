@@ -3,6 +3,8 @@ package me.magnum.melonds.common.opengl
 import me.magnum.melonds.domain.model.Rect
 import me.magnum.melonds.domain.model.SCREEN_HEIGHT
 import me.magnum.melonds.domain.model.WideMelon
+import me.magnum.melonds.domain.model.consoleAspectRatio
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
@@ -36,8 +38,9 @@ object ScreenTextureUVs {
 
     /**
      * Grows the top screen's layout rect so the extra WideMelon columns show at the same scale as the native image: the
-     * width is multiplied by width/256 around the rect's center. If that no longer fits in the surface, the rect is scaled
-     * down uniformly (keeping its center) until it does. Layout rects themselves are never modified.
+     * width is multiplied by width/256 around the rect's center. If that no longer fits in the surface, a 4:3 rect is scaled
+     * down uniformly (keeping its center) and a deliberately stretched rect is clamped to the surface width. Layout rects
+     * themselves are never modified.
      */
     fun widenTopScreenRect(rect: Rect, widescreenViewWidth: Int, surfaceWidth: Int, surfaceHeight: Int): Rect {
         val width = WideMelon.normalizeWidth(widescreenViewWidth)
@@ -48,9 +51,14 @@ object ScreenTextureUVs {
         var newWidth = rect.width * width / WideMelon.NATIVE_WIDTH.toFloat()
         var newHeight = rect.height.toFloat()
         if (surfaceWidth > 0 && newWidth > surfaceWidth) {
-            val shrink = surfaceWidth / newWidth
+            val rectAspectRatio = rect.width.toFloat() / rect.height
+            val keepsConsoleAspect = abs(rectAspectRatio / consoleAspectRatio - 1f) < 0.02f
+            if (keepsConsoleAspect) {
+                // Aspect-correct layout: shrink uniformly so the wide image keeps its proportions
+                newHeight *= surfaceWidth / newWidth
+            }
+            // Otherwise the layout stretches the screen on purpose (fill width/height), so keep filling the height
             newWidth = surfaceWidth.toFloat()
-            newHeight *= shrink
         }
 
         val centerX = rect.x + rect.width / 2f
