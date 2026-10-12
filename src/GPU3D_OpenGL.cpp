@@ -27,6 +27,7 @@
 #include "NDS.h"
 #include "GPU.h"
 #include "GPU3D_OpenGL_shaders.h"
+#include "WideMelon.h"
 
 namespace melonDS
 {
@@ -61,6 +62,13 @@ u32 PackOpenGlAttrToLogical(u32 packedColor)
 
 u32 ResolveOpenGlVertexX(const Vertex& vertex, int scale)
 {
+    if (WideMelon::Enabled())
+    {
+        return scale > 1
+            ? WideMelon::MapHiresX(vertex.HiresPosition[0], scale)
+            : WideMelon::MapFinalX(vertex.FinalPosition[0], scale);
+    }
+
     return scale > 1
         ? static_cast<u32>((vertex.HiresPosition[0] * scale) >> 4)
         : vertex.FinalPosition[0];
@@ -455,14 +463,15 @@ void GLRenderer::SetCoverageFixSettings(
 
 void GLRenderer::SetRenderSettings(bool betterpolygons, int scale) noexcept
 {
-    if (betterpolygons == BetterPolygons && scale == ScaleFactor)
+    const int desiredW = WideMelon::Width() * scale;
+    if (betterpolygons == BetterPolygons && scale == ScaleFactor && ScreenW == desiredW)
         return;
 
     CurGLCompositor.SetScaleFactor(scale);
     ScaleFactor = scale;
     BetterPolygons = betterpolygons;
 
-    ScreenW = 256 * scale;
+    ScreenW = desiredW;
     ScreenH = 192 * scale;
 
     glBindTexture(GL_TEXTURE_2D, ColorBufferTex);
@@ -778,7 +787,10 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
                 cS *= cW;
                 cT *= cW;
 
-                cX = (cX * ScaleFactor) >> 4;
+                if (WideMelon::Enabled())
+                    cX = WideMelon::MapHiresX(cX, ScaleFactor);
+                else
+                    cX = (cX * ScaleFactor) >> 4;
                 cY = (cY * ScaleFactor) >> 4;
 
                 u32 w = (u32)cW;
@@ -910,7 +922,7 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
     u32 flags = 0;
     if (gpu3d.RenderPolygonRAM[0]->WBuffer) flags |= RenderFlag_WBuffer;
 
-    if (h != 192) glScissor(0, y<<ScaleFactor, 256<<ScaleFactor, h<<ScaleFactor);
+    if (h != 192) glScissor(0, y<<ScaleFactor, WideMelon::Enabled() ? ScreenW : (256<<ScaleFactor), h<<ScaleFactor);
 
     GLboolean fogenable = (gpu3d.RenderDispCnt & (1<<7)) ? GL_TRUE : GL_FALSE;
 
@@ -1479,7 +1491,12 @@ void GLRenderer::PrepareCaptureFrame()
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, DownscaleFramebuffer);
     GLenum bufferAttachment = GL_COLOR_ATTACHMENT0;
     glDrawBuffers(1, &bufferAttachment);
-    glBlitFramebuffer(0, 0, ScreenW, ScreenH, 0, 0, 256, 192, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    {
+        // Display capture only ever sees the native 256 px in the middle of a wide frame
+        const int srcX0 = WideMelon::SidePad() * ScaleFactor;
+        const int srcX1 = srcX0 + 256 * ScaleFactor;
+        glBlitFramebuffer(srcX0, 0, srcX1, ScreenH, 0, 0, 256, 192, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    }
 
     glBindBuffer(GL_PIXEL_PACK_BUFFER, PixelbufferID);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, DownscaleFramebuffer);
