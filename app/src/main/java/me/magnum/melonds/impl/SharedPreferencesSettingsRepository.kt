@@ -30,6 +30,7 @@ import kotlinx.serialization.json.encodeToStream
 import me.magnum.melonds.common.retroarch.RetroArchShaderPreset
 import me.magnum.melonds.common.retroarch.RetroArchShaderRootResolver
 import me.magnum.melonds.domain.model.FrameskipMode
+import me.magnum.melonds.domain.model.WideMelon
 import me.magnum.melonds.domain.model.FrameskipConfiguration
 import me.magnum.melonds.domain.model.RetroArchShaderSource
 import me.magnum.melonds.common.uridelegates.UriHandler
@@ -260,7 +261,8 @@ class SharedPreferencesSettingsRepository(
         renderConfigurationFlow = combine(
             renderInputsFlow,
             observeRetroArchShaderConfiguration(),
-        ) { renderInputs, retroArchShader ->
+            getWidescreenViewWidth(),
+        ) { renderInputs, retroArchShader, widescreenViewWidth ->
             val effectiveFiltering = when {
                 renderInputs.core.renderer == VideoRenderer.VULKAN && !renderInputs.core.filtering.isSupportedByVulkan() -> VideoFiltering.NONE
                 renderInputs.core.renderer != VideoRenderer.VULKAN && !renderInputs.core.filtering.isSupportedByOpenGlSurface() -> VideoFiltering.NONE
@@ -288,6 +290,7 @@ class SharedPreferencesSettingsRepository(
                 renderInputs.coverageFix.applyClamp,
                 renderInputs.coverageFix.debugClearMagenta,
                 if (effectiveFiltering == VideoFiltering.RETROARCH) retroArchShader else EmptyRetroArchShaderConfiguration,
+                widescreenViewWidth,
             )
         }.conflate().shareIn(preferencesCoroutineScope, SharingStarted.Lazily, replay = 1)
     }
@@ -814,6 +817,13 @@ class SharedPreferencesSettingsRepository(
         return getOrCreatePreferenceSharedFlow("video_internal_resolution") {
             val internalResolutionPreference = preferences.getString("video_internal_resolution", "1")!!
             internalResolutionPreference.toIntOrNull() ?: 1
+        }
+    }
+
+    override fun getWidescreenViewWidth(): Flow<Int> {
+        return getOrCreatePreferenceSharedFlow("video_widescreen_view_width") {
+            val widthPreference = preferences.getString("video_widescreen_view_width", "256")!!
+            WideMelon.normalizeWidth(widthPreference.toIntOrNull() ?: WideMelon.NATIVE_WIDTH)
         }
     }
 

@@ -21,6 +21,15 @@
             android:entryValues="@array/video_internal_resolution_values"
             android:defaultValue="1"/>
 
+    <me.magnum.melonds.ui.settings.preferences.InGameLockedListPreference
+            android:key="video_widescreen_view_width"
+            android:title="@string/widescreen_view_width"
+            android:summary="@string/widescreen_view_width_summary"
+            app:iconSpaceReserved="false"
+            android:entries="@array/video_widescreen_view_width_options"
+            android:entryValues="@array/video_widescreen_view_width_values"
+            android:defaultValue="256"/>
+
     <SwitchPreference
             android:key="enable_threaded_rendering"
             android:title="@string/threaded_rendering"
