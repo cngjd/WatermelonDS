@@ -170,7 +170,6 @@ class EmulatorActivity : AppCompatActivity() {
         private const val OVERLAY_FOCUS_ATTEMPTS = 12
         private const val OVERLAY_FOCUS_RETRY_MS = 32L
         private const val SHADER_DIAGNOSTICS_POLL_MS = 1500L
-        private const val DS_SCREEN_WIDTH = 256
         private const val DS_FRAME_ATLAS_HEIGHT = 386
         private const val SHADER_PREWARM_LAYOUT_TIMEOUT_MS = 2000L
         private const val SHADER_PREWARM_LAYOUT_POLL_MS = 50L
@@ -2055,7 +2054,7 @@ class EmulatorActivity : AppCompatActivity() {
         prewarmedOpenGlRetroArchFilterKey = key
 
         val scale = if (configuration.renderer == VideoRenderer.SOFTWARE) 1 else configuration.resolutionScaling.coerceAtLeast(1)
-        val atlasWidth = DS_SCREEN_WIDTH * scale
+        val atlasWidth = configuration.widescreenViewWidth * scale
         val atlasHeight = DS_FRAME_ATLAS_HEIGHT * scale
 
         binding.textLoading.setText(R.string.info_retroarch_compiling_title)
