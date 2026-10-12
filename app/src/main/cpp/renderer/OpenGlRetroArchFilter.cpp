@@ -14,6 +14,8 @@ namespace
 
 constexpr melonDS::u32 kNativeScreenWidth = 256;
 constexpr melonDS::u32 kNativeScreenHeight = 192;
+// Frame textures hold both screens plus a gap line each: (192 + 1) * 2 rows per scale unit
+constexpr melonDS::u32 kNativeAtlasHeight = (kNativeScreenHeight + 1) * 2;
 class GlStateGuard
 {
 public:
@@ -70,6 +72,16 @@ OpenGlRetroArchFilter::Sizing OpenGlRetroArchFilter::calculateSizing(melonDS::u3
     Sizing sizing{};
     sizing.nativeDisplayMode = config.nativeSourceResolution;
     sizing.inputScale = std::max(1u, atlasWidth / kNativeScreenWidth);
+
+    // WideMelon frames are wider than 256 px per scale unit, so derive the scale from the height instead
+    const melonDS::u32 scaleFromHeight = std::max(1u, atlasHeight / kNativeAtlasHeight);
+    const melonDS::u32 wideWidth = atlasWidth / scaleFromHeight;
+    if (wideWidth > kNativeScreenWidth)
+    {
+        sizing.inputScale = scaleFromHeight;
+        sizing.wideWidth = wideWidth;
+    }
+
     sizing.inputScreenWidth = kNativeScreenWidth * sizing.inputScale;
     sizing.inputScreenHeight = kNativeScreenHeight * sizing.inputScale;
     sizing.inputBottomOffsetY = atlasHeight > sizing.inputScreenHeight
@@ -94,6 +106,16 @@ OpenGlRetroArchFilter::Sizing OpenGlRetroArchFilter::calculateSizing(melonDS::u3
     sizing.requestedOutputHeight = output.requestedHeight;
     sizing.clamped = output.clamped;
 
+    // Top screen keeps the bottom screen's pixel scale and just gets the extra WideMelon columns. The output atlas is as
+    // wide as the top screen with the bottom screen centered, matching the frame texture layout the presenters expect.
+    sizing.inputTopScreenWidth = sizing.wideWidth * sizing.inputScale;
+    sizing.inputBottomOffsetX = (sizing.inputTopScreenWidth - sizing.inputScreenWidth) / 2u;
+    sizing.sourceTopScreenWidth = sizing.nativeDisplayMode ? sizing.wideWidth : sizing.inputTopScreenWidth;
+    sizing.outputTopScreenWidth = static_cast<melonDS::u32>(
+        (static_cast<melonDS::u64>(sizing.outputScreenWidth) * sizing.wideWidth + kNativeScreenWidth / 2) / kNativeScreenWidth);
+    sizing.outputBottomOffsetX = (sizing.outputTopScreenWidth - sizing.outputScreenWidth) / 2u;
+    sizing.outputAtlasWidth = std::max(sizing.outputAtlasWidth, sizing.outputTopScreenWidth);
+
     return sizing;
 }
 
@@ -109,7 +131,7 @@ void OpenGlRetroArchFilter::logSizingIfNeeded(const Sizing& sizing, melonDS::u32
 
     melonDS::Platform::Log(
         melonDS::Platform::LogLevel::Info,
-        "OpenGlPresenter[RetroArch]: sizing mode=%s atlas=%ux%u input=%ux%u source=%ux%u output=%ux%u outAtlas=%ux%u layout=%ux%u requested=%ux%u%s",
+        "OpenGlPresenter[RetroArch]: sizing mode=%s atlas=%ux%u input=%ux%u source=%ux%u output=%ux%u outAtlas=%ux%u layout=%ux%u requested=%ux%u wide=%u topSource=%u topOutput=%u%s",
         sizing.nativeDisplayMode ? "native" : "internal",
         atlasWidth,
         atlasHeight,
@@ -125,6 +147,9 @@ void OpenGlRetroArchFilter::logSizingIfNeeded(const Sizing& sizing, melonDS::u32
         config.maxLayoutHeight,
         sizing.requestedOutputWidth,
         sizing.requestedOutputHeight,
+        sizing.wideWidth,
+        sizing.sourceTopScreenWidth,
+        sizing.outputTopScreenWidth,
         sizing.clamped ? " (clamped)" : "");
 }
 
@@ -177,11 +202,12 @@ GLuint OpenGlRetroArchFilter::runFilter(GLuint sourceTexture, melonDS::u32 atlas
 
     const bool downsampling = sizing.sourceScreenWidth < sizing.inputScreenWidth;
     if (!drawScreenInput(
-            sourceTexture, 0, 0, sizing.inputScreenWidth, sizing.inputScreenHeight,
+            sourceTexture, 0, 0, sizing.inputTopScreenWidth, sizing.inputScreenHeight,
             atlasWidth, atlasHeight, topInput, downsampling)
         || !drawScreenInput(
             sourceTexture,
-            0, sizing.inputBottomOffsetY, sizing.inputScreenWidth, sizing.inputBottomOffsetY + sizing.inputScreenHeight,
+            sizing.inputBottomOffsetX, sizing.inputBottomOffsetY,
+            sizing.inputBottomOffsetX + sizing.inputScreenWidth, sizing.inputBottomOffsetY + sizing.inputScreenHeight,
             atlasWidth, atlasHeight, bottomInput, downsampling))
     {
         return 0;
@@ -202,14 +228,19 @@ GLuint OpenGlRetroArchFilter::runFilter(GLuint sourceTexture, melonDS::u32 atlas
         return 0;
     }
 
+    // The bottom screen doesn't cover the whole width of a wide atlas. Keep the side columns black
+    if (sizing.outputBottomOffsetX > 0)
+        clearImage(atlasOutput);
+
     blitRegion(
-        topOutput.texture, 0, 0, sizing.outputScreenWidth, sizing.outputScreenHeight,
-        atlasOutput.texture, 0, 0, sizing.outputScreenWidth, sizing.outputScreenHeight,
+        topOutput.texture, 0, 0, sizing.outputTopScreenWidth, sizing.outputScreenHeight,
+        atlasOutput.texture, 0, 0, sizing.outputTopScreenWidth, sizing.outputScreenHeight,
         false);
     blitRegion(
         bottomOutput.texture, 0, 0, sizing.outputScreenWidth, sizing.outputScreenHeight,
         atlasOutput.texture,
-        0, sizing.outputBottomOffsetY, sizing.outputScreenWidth, sizing.outputBottomOffsetY + sizing.outputScreenHeight,
+        sizing.outputBottomOffsetX, sizing.outputBottomOffsetY,
+        sizing.outputBottomOffsetX + sizing.outputScreenWidth, sizing.outputBottomOffsetY + sizing.outputScreenHeight,
         false);
 
     return atlasOutput.texture;
@@ -279,8 +310,8 @@ bool OpenGlRetroArchFilter::ensureChains(
 
     if (!topChain.configure(
             config.presetPath,
-            sizing.sourceScreenWidth, sizing.sourceScreenHeight,
-            sizing.outputScreenWidth, sizing.outputScreenHeight,
+            sizing.sourceTopScreenWidth, sizing.sourceScreenHeight,
+            sizing.outputTopScreenWidth, sizing.outputScreenHeight,
             config.parameterOverrides)
         || !bottomChain.configure(
             config.presetPath,
@@ -322,8 +353,8 @@ bool OpenGlRetroArchFilter::ensureResources(const Sizing& sizing)
         return false;
     }
 
-    return ensureImage(topInput, sizing.sourceScreenWidth, sizing.sourceScreenHeight, false)
-        && ensureImage(topOutput, sizing.outputScreenWidth, sizing.outputScreenHeight, false)
+    return ensureImage(topInput, sizing.sourceTopScreenWidth, sizing.sourceScreenHeight, false)
+        && ensureImage(topOutput, sizing.outputTopScreenWidth, sizing.outputScreenHeight, false)
         && ensureImage(bottomInput, sizing.sourceScreenWidth, sizing.sourceScreenHeight, false)
         && ensureImage(bottomOutput, sizing.outputScreenWidth, sizing.outputScreenHeight, false)
         && ensureImage(atlasOutput, sizing.outputAtlasWidth, sizing.outputAtlasHeight, true);
@@ -366,6 +397,24 @@ bool OpenGlRetroArchFilter::ensureImage(ImageResource& image, melonDS::u32 width
     image.width = width;
     image.height = height;
     return true;
+}
+
+void OpenGlRetroArchFilter::clearImage(const ImageResource& image)
+{
+    GLfloat previousClearColor[4] = {};
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, previousClearColor);
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawFbo);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, image.texture, 0);
+    const GLenum drawBuffers[] = { GL_COLOR_ATTACHMENT0 };
+    glDrawBuffers(1, drawBuffers);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+
+    glClearColor(previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
 }
 
 void OpenGlRetroArchFilter::destroyImage(ImageResource& image)
