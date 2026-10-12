@@ -88,6 +88,7 @@ interface SettingsRepository {
     fun removeCustomVulkanDriver(id: String)
     fun clearCustomVulkanDrivers()
     fun getVideoInternalResolutionScaling(): Flow<Int>
+    fun getWidescreenViewWidth(): Flow<Int>
     fun getVideoFiltering(): Flow<VideoFiltering>
     fun isThreadedRenderingEnabled(): Flow<Boolean>
     fun isRendererDebugToolsEnabled(): Flow<Boolean>
