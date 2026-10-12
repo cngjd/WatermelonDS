@@ -58,7 +58,11 @@ jobs:
 
       - name: Setup Android SDK
         if: steps.sync.outputs.changed == 'true' || inputs.force_build
-        uses: android-actions/setup-android@v3
+        # The runner image ships an SDK; install exactly what AppConfig/app/build.gradle.kts need
+        run: |
+          sdkmanager="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin | sort -V | tail -1)/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.0.13004108" "cmake;3.22.1" > /dev/null
 
       - name: Build and test
         if: steps.sync.outputs.changed == 'true' || inputs.force_build
