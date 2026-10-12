@@ -26,6 +26,7 @@ struct OpenGlRenderSettings : public RenderSettings
 {
     bool betterPolygons;
     int scale;
+    int viewWidth; // WideMelon 3D view width (256..768, even). 256 = native.
     bool rendererDebugToolsEnabled;
     bool rendererDebugBgObjEnabled;
     bool rendererDebugLatchTraceEnabled;
@@ -41,6 +42,7 @@ struct ComputeRenderSettings : public RenderSettings
 {
     int scale;
     bool highResCoordinates;
+    int viewWidth; // WideMelon 3D view width (256..768, even). 256 = native.
 };
 
 struct VulkanRenderSettings : public RenderSettings
