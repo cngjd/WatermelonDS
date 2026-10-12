@@ -6,6 +6,7 @@ import android.graphics.RectF
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
 import android.opengl.GLUtils
+import me.magnum.melonds.common.opengl.ScreenTextureUVs
 import me.magnum.melonds.common.opengl.Shader
 import me.magnum.melonds.common.opengl.ShaderFactory
 import me.magnum.melonds.common.opengl.ShaderProgramSource
@@ -58,10 +59,6 @@ class ExternalLayoutRender(
     private var rotateLeft: Boolean,
 ) : EmulatorRenderer {
 
-    companion object {
-        private const val TOTAL_SCREEN_HEIGHT = 384
-    }
-
     private lateinit var shader: Shader
 
     private var posTop: FloatBuffer? = null
@@ -71,6 +68,9 @@ class ExternalLayoutRender(
     private lateinit var uvBottom: FloatBuffer
 
     private var videoFiltering: VideoFiltering = VideoFiltering.NONE
+    private var widescreenViewWidth: Int = 256
+    // Shader and UV rebuilds must happen on the GL thread, so configuration changes only flag them
+    @Volatile private var isScreenShaderDirty = false
 
     private var viewWidth = 0
     private var viewHeight = 0
@@ -181,7 +181,9 @@ class ExternalLayoutRender(
     }
 
     private fun updateBuffers() {
-        posTop = topScreen?.let { rectToBuffer(it) }
+        posTop = topScreen?.let {
+            rectToBuffer(ScreenTextureUVs.widenTopScreenRect(it, widescreenViewWidth, layoutWidth, layoutHeight))
+        }
         posBottom = bottomScreen?.let { rectToBuffer(it) }
     }
 
@@ -196,6 +198,13 @@ class ExternalLayoutRender(
 
     override fun updateRendererConfiguration(newRendererConfiguration: RuntimeRendererConfiguration?) {
         val newFiltering = newRendererConfiguration?.videoFiltering ?: VideoFiltering.NONE
+        val newWidth = newRendererConfiguration?.widescreenViewWidth ?: 256
+        if (newWidth != widescreenViewWidth) {
+            widescreenViewWidth = newWidth
+            // Filters and UVs depend on the texture width
+            isScreenShaderDirty = true
+            updateBuffers()
+        }
         updateVideoFiltering(newFiltering)
     }
 
@@ -212,7 +221,7 @@ class ExternalLayoutRender(
 
     override fun onSurfaceCreated() {
         shader = ShaderFactory.createShaderProgram(
-            VideoFilterShaderProvider.getShaderSource(videoFiltering)
+            VideoFilterShaderProvider.getShaderSource(videoFiltering, widescreenViewWidth)
         )
         lastScreenTextureFiltering = Int.MIN_VALUE
 
@@ -226,23 +235,12 @@ class ExternalLayoutRender(
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
 
         backgroundShader = ShaderFactory.createShaderProgram(ShaderProgramSource.BackgroundShader)
-        val lineRelativeSize = 1f / (TOTAL_SCREEN_HEIGHT + 2).toFloat()
-        val topUvs = floatArrayOf(
-            0f, 0.5f - lineRelativeSize,
-            0f, 0f,
-            1f, 0f,
-            0f, 0.5f - lineRelativeSize,
-            1f, 0f,
-            1f, 0.5f - lineRelativeSize,
-        )
-        val bottomUvs = floatArrayOf(
-            0f, 1f,
-            0f, 0.5f + lineRelativeSize,
-            1f, 0.5f + lineRelativeSize,
-            0f, 1f,
-            1f, 0.5f + lineRelativeSize,
-            1f, 1f,
-        )
+        updateUvBuffers()
+    }
+
+    private fun updateUvBuffers() {
+        val topUvs = ScreenTextureUVs.topUvs()
+        val bottomUvs = ScreenTextureUVs.bottomUvs(widescreenViewWidth)
         uvTop = ByteBuffer.allocateDirect(topUvs.size * 4)
             .order(ByteOrder.nativeOrder())
             .asFloatBuffer()
@@ -268,6 +266,7 @@ class ExternalLayoutRender(
         }
 
         val textureId = presentFrameWrapper.textureId
+        recreateShaderIfDirty()
 
         GLES30.glViewport(0, 0, viewWidth, viewHeight)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
@@ -346,10 +345,23 @@ class ExternalLayoutRender(
     fun updateVideoFiltering(videoFiltering: VideoFiltering) {
         val shouldRecreate = this.videoFiltering != videoFiltering
         this.videoFiltering = videoFiltering
-        if (shouldRecreate && this::shader.isInitialized) {
+        if (shouldRecreate) {
+            isScreenShaderDirty = true
+        }
+    }
+
+    private fun recreateShaderIfDirty() {
+        if (!isScreenShaderDirty) {
+            return
+        }
+        isScreenShaderDirty = false
+        if (this::uvTop.isInitialized) {
+            updateUvBuffers()
+        }
+        if (this::shader.isInitialized) {
             shader.delete()
             shader = ShaderFactory.createShaderProgram(
-                VideoFilterShaderProvider.getShaderSource(videoFiltering)
+                VideoFilterShaderProvider.getShaderSource(videoFiltering, widescreenViewWidth)
             )
             lastScreenTextureFiltering = Int.MIN_VALUE
         }
