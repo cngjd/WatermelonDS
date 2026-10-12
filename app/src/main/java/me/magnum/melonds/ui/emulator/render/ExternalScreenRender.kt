@@ -1,6 +1,7 @@
 package me.magnum.melonds.ui.emulator.render
 
 import android.opengl.GLES30
+import me.magnum.melonds.common.opengl.ScreenTextureUVs
 import me.magnum.melonds.common.opengl.Shader
 import me.magnum.melonds.common.opengl.ShaderFactory
 import me.magnum.melonds.common.opengl.VideoFilterShaderProvider
@@ -8,7 +9,7 @@ import me.magnum.melonds.domain.model.SCREEN_HEIGHT
 import me.magnum.melonds.domain.model.SCREEN_WIDTH
 import me.magnum.melonds.domain.model.ScreenAlignment
 import me.magnum.melonds.domain.model.VideoFiltering
-import me.magnum.melonds.domain.model.consoleAspectRatio
+import me.magnum.melonds.domain.model.WideMelon
 import me.magnum.melonds.domain.model.render.PresentFrameWrapper
 import me.magnum.melonds.ui.RdsRotation
 import me.magnum.melonds.ui.emulator.model.RuntimeRendererConfiguration
@@ -31,6 +32,8 @@ class ExternalScreenRender(
     private var screensVao = 0
 
     private var videoFiltering: VideoFiltering = VideoFiltering.NONE
+    // Top screen width in DS pixels (wider than 256 with WideMelon)
+    private var widescreenViewWidth: Int = SCREEN_WIDTH
 
     private var surfaceWidth = 0
     private var surfaceHeight = 0
@@ -48,6 +51,12 @@ class ExternalScreenRender(
                 videoFiltering = newFiltering
                 areRenderSettingsDirty = true
             }
+            val newWidth = newRendererConfiguration?.widescreenViewWidth ?: SCREEN_WIDTH
+            if (widescreenViewWidth != newWidth) {
+                widescreenViewWidth = newWidth
+                areRenderSettingsDirty = true
+                areVerticesDirty = true
+            }
         }
     }
 
@@ -60,7 +69,7 @@ class ExternalScreenRender(
 
     override fun onSurfaceCreated() {
         shader = ShaderFactory.createShaderProgram(
-            VideoFilterShaderProvider.getShaderSource(videoFiltering)
+            VideoFilterShaderProvider.getShaderSource(videoFiltering, widescreenViewWidth)
         )
 
         val buffers = IntArray(2)
@@ -91,26 +100,7 @@ class ExternalScreenRender(
     }
 
     private fun uploadVertices(coords: FloatArray) {
-        val lineRelativeSize = 1f / (SCREEN_HEIGHT * 2 + 2).toFloat()
-        val uvs = if (true /*screen == DsExternalScreen.TOP*/) {
-            floatArrayOf(
-                0f, 0.5f - lineRelativeSize,
-                0f, 0f,
-                1f, 0f,
-                0f, 0.5f - lineRelativeSize,
-                1f, 0f,
-                1f, 0.5f - lineRelativeSize
-            )
-        } else {
-            floatArrayOf(
-                0f, 1f,
-                0f, 0.5f + lineRelativeSize,
-                1f, 0.5f + lineRelativeSize,
-                0f, 1f,
-                1f, 0.5f + lineRelativeSize,
-                1f, 1f
-            )
-        }
+        val uvs = ScreenTextureUVs.topUvs()
 
         val vertexData = floatArrayOf(
             coords[0], coords[1],   uvs[0], uvs[1], 1f,
@@ -170,32 +160,34 @@ class ExternalScreenRender(
     }
 
     private fun computeIntegerScaleDimensions(actualWidth: Int, actualHeight: Int): Pair<Int, Int> {
-        val widthScale = actualWidth / SCREEN_WIDTH
+        val contentWidth = WideMelon.normalizeWidth(widescreenViewWidth)
+        val widthScale = actualWidth / contentWidth
         val heightScale = actualHeight / SCREEN_HEIGHT
         val maxScale = min(widthScale, heightScale)
         val scale = if (maxScale <= 0) {
             min(
-                actualWidth.toFloat() / SCREEN_WIDTH,
+                actualWidth.toFloat() / contentWidth,
                 actualHeight.toFloat() / SCREEN_HEIGHT,
             )
         } else {
             maxScale.toFloat()
         }
 
-        val width = (SCREEN_WIDTH * scale).roundToInt().coerceAtLeast(1).coerceAtMost(actualWidth)
+        val width = (contentWidth * scale).roundToInt().coerceAtLeast(1).coerceAtMost(actualWidth)
         val height = (SCREEN_HEIGHT * scale).roundToInt().coerceAtLeast(1).coerceAtMost(actualHeight)
         return width to height
     }
 
     private fun computeAspectDimensions(actualWidth: Int, actualHeight: Int): Pair<Int, Int> {
         val viewRatio = actualWidth.toFloat() / actualHeight.toFloat()
-        return if (viewRatio > consoleAspectRatio) {
+        val contentAspectRatio = WideMelon.topScreenAspectRatio(widescreenViewWidth)
+        return if (viewRatio > contentAspectRatio) {
             val height = actualHeight
-            val width = (height * consoleAspectRatio).roundToInt().coerceAtLeast(1).coerceAtMost(actualWidth)
+            val width = (height * contentAspectRatio).roundToInt().coerceAtLeast(1).coerceAtMost(actualWidth)
             width to height
         } else {
             val width = actualWidth
-            val height = (width / consoleAspectRatio).roundToInt().coerceAtLeast(1).coerceAtMost(actualHeight)
+            val height = (width / contentAspectRatio).roundToInt().coerceAtLeast(1).coerceAtMost(actualHeight)
             width to height
         }
     }
@@ -222,7 +214,7 @@ class ExternalScreenRender(
         // Delete previous shader
         shader?.delete()
 
-        val shaderSource = VideoFilterShaderProvider.getShaderSource(videoFiltering)
+        val shaderSource = VideoFilterShaderProvider.getShaderSource(videoFiltering, widescreenViewWidth)
         shader = ShaderFactory.createShaderProgram(shaderSource)
         lastScreenTextureFiltering = Int.MIN_VALUE
     }
