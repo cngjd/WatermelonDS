@@ -1,4 +1,7 @@
 # WatermelonDS
+
+> **WatermelonDS Wide**: this branch adds the WideMelon widescreen 3D view. See [docs/WIDEMELON.md](docs/WIDEMELON.md).
+
 A Nintendo DS and DSi emulator for Android, built on top of [melonDS](https://melonds.kuribo64.net/) and the
 [melonDS Android port](https://github.com/rafaelvcaetano/melonDS-android) by rafaelvcaetano.
 
@@ -109,3 +112,5 @@ If you want to create a release build, you will need to modify your `local.prope
 *  [melonDS Android](https://github.com/rafaelvcaetano/melonDS-android) by rafaelvcaetano
 *  [librashader](https://github.com/SnowflakePowered/librashader) — RetroArch shader preset support
 *  [rcheevos](https://github.com/RetroAchievements/rcheevos) — RetroAchievements support
+*  [WideMelon](https://github.com/pruefsumme/widemelon) by pruefsumme — widescreen 3D projection/compositing (WatermelonDS Wide)
+*  [widemelon-android](https://github.com/manijose1919/widemelon-android) by manijose1919 — Android WideMelon port this build adapts
