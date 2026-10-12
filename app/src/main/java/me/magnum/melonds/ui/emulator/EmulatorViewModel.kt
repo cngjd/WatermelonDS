@@ -2992,6 +2992,7 @@ class EmulatorViewModel @Inject constructor(
                     videoFiltering = if (dropShader) VideoFiltering.NONE else it.videoFiltering,
                     resolutionScaling = it.resolutionScaling,
                     retroArchShader = if (dropShader) it.retroArchShader.copy(presetPath = null) else it.retroArchShader,
+                    widescreenViewWidth = it.effectiveWidescreenViewWidth,
                 )
             }
         }
