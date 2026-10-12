@@ -1,21 +1,25 @@
 package me.magnum.melonds.common.opengl
 
 import me.magnum.melonds.domain.model.VideoFiltering
+import me.magnum.melonds.domain.model.WideMelon
 
 object VideoFilterShaderProvider {
-    private val FILTERING_SHADER_MAP = mapOf(
-        VideoFiltering.NONE to ShaderProgramSource.NoFilterShader,
-        VideoFiltering.LINEAR to ShaderProgramSource.LinearShader,
-        VideoFiltering.XBR2 to ShaderProgramSource.XbrShader,
-        VideoFiltering.HQ2X to ShaderProgramSource.Hq2xShader,
-        VideoFiltering.HQ4X to ShaderProgramSource.Hq4xShader,
-        VideoFiltering.QUILEZ to ShaderProgramSource.QuilezShader,
-        VideoFiltering.LCD to ShaderProgramSource.LcdShader,
-        VideoFiltering.SCANLINES to ShaderProgramSource.ScanlinesShader,
-        VideoFiltering.RETROARCH to ShaderProgramSource.RetroArchPassthroughShader,
-    )
-
-    fun getShaderSource(filtering: VideoFiltering): ShaderProgramSource {
-        return FILTERING_SHADER_MAP[filtering] ?: ShaderProgramSource.NoFilterShader
+    /**
+     * @param textureWidth Width of the frame texture in DS pixels (256, or the WideMelon width). Filters that sample
+     * neighbouring texels need it to compute texel sizes.
+     */
+    fun getShaderSource(filtering: VideoFiltering, textureWidth: Int = WideMelon.NATIVE_WIDTH): ShaderProgramSource {
+        val width = WideMelon.normalizeWidth(textureWidth)
+        return when (filtering) {
+            VideoFiltering.NONE -> ShaderProgramSource.NoFilterShader
+            VideoFiltering.LINEAR -> ShaderProgramSource.LinearShader
+            VideoFiltering.XBR2 -> ShaderProgramSource.createXbrShader(width)
+            VideoFiltering.HQ2X -> ShaderProgramSource.createHq2xShader(width)
+            VideoFiltering.HQ4X -> ShaderProgramSource.createHq4xShader(width)
+            VideoFiltering.QUILEZ -> ShaderProgramSource.createQuilezShader(width)
+            VideoFiltering.LCD -> ShaderProgramSource.createLcdShader(width)
+            VideoFiltering.SCANLINES -> ShaderProgramSource.createScanlinesShader(width)
+            VideoFiltering.RETROARCH -> ShaderProgramSource.RetroArchPassthroughShader
+        }
     }
 }
