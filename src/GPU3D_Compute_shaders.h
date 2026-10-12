@@ -1642,10 +1642,13 @@ void main()
     imageStore(FinalFB, ivec2(gl_GlobalInvocationID.xy), result);
 
     // It's a division by constant, so using the builtin division is fine
-    const int scale = ScreenWidth/256;
+    const int scale = ScaleFactor;
     ivec2 lowresCoordinate = ivec2(gl_GlobalInvocationID.xy) / scale;
     ivec2 lowresCoordinateRest = ivec2(gl_GlobalInvocationID.xy) % scale;
-    if (lowresCoordinateRest == ivec2(0, 0))
+    lowresCoordinate.x -= WideSidePad;
+    if (lowresCoordinateRest == ivec2(0, 0)
+        && lowresCoordinate.x >= 0 && lowresCoordinate.x < 256
+        && lowresCoordinate.y >= 0 && lowresCoordinate.y < 192)
     {
         uvec4 color8;
         color8.x = bitfieldExtract(color.x, 0, 8);

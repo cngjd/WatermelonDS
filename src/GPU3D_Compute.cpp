@@ -27,6 +27,8 @@
 
 #include "GPU3D_Compute_shaders.h"
 
+#include "WideMelon.h"
+
 namespace melonDS
 {
 
@@ -62,6 +64,10 @@ bool ComputeRenderer::CompileShader(GLuint& shader, const std::string& source, c
     shaderSource += std::to_string(ScreenWidth);
     shaderSource += "\n#define ScreenHeight ";
     shaderSource += std::to_string(ScreenHeight);
+    shaderSource += "\n#define ScaleFactor ";
+    shaderSource += std::to_string(ScaleFactor);
+    shaderSource += "\n#define WideSidePad ";
+    shaderSource += std::to_string(WideMelon::SidePad());
     shaderSource += "\n#define MaxWorkTiles ";
     shaderSource += std::to_string(MaxWorkTiles);
     shaderSource += "\n#define TileSize ";
@@ -334,6 +340,14 @@ void ComputeRenderer::SetRenderSettings(int scale, bool highResolutionCoordinate
 
     CurGLCompositor.SetScaleFactor(scale);
 
+    const int desiredW = WideMelon::Width() * scale;
+    const int desiredH = 192 * scale;
+    if (ScaleFactor != -1 && ScaleFactor == scale && ScreenWidth == desiredW && ScreenHeight == desiredH
+        && HiresCoordinates == highResolutionCoordinates)
+    {
+        return;
+    }
+
     if (ScaleFactor != -1)
     {
         DeleteShaders();
@@ -342,8 +356,8 @@ void ComputeRenderer::SetRenderSettings(int scale, bool highResolutionCoordinate
     ShaderStepIdx = 0;
 
     ScaleFactor = scale;
-    ScreenWidth = 256 * ScaleFactor;
-    ScreenHeight = 192 * ScaleFactor;
+    ScreenWidth = desiredW;
+    ScreenHeight = desiredH;
 
     //Starting at 4.5x we want to double TileSize every time scale doubles
     TileScale = 2 * ScaleFactor / 9;
@@ -351,9 +365,6 @@ void ComputeRenderer::SetRenderSettings(int scale, bool highResolutionCoordinate
     TileScale <<= 1;
     TileScale += TileScale == 0;
 
-    std::printf("Scale: %d\n", ScaleFactor);
-    std::printf("TileScale: %d\n", TileScale);
-    
     TileSize = std::min(8 * TileScale, 32);
     CoarseTileCountY = TileSize < 32 ? 4 : 6;
     ClearCoarseBinMaskLocalSize = TileSize < 32 ? 64 : 48;
@@ -765,12 +776,18 @@ void ComputeRenderer::RenderFrame(GPU& gpu)
         {
             if (HiresCoordinates)
             {
-                scaledPositions[i][0] = (polygon->Vertices[i]->HiresPosition[0] * ScaleFactor) >> 4;
+                if (WideMelon::Enabled())
+                    scaledPositions[i][0] = (s32)WideMelon::MapHiresX(polygon->Vertices[i]->HiresPosition[0], ScaleFactor);
+                else
+                    scaledPositions[i][0] = (polygon->Vertices[i]->HiresPosition[0] * ScaleFactor) >> 4;
                 scaledPositions[i][1] = (polygon->Vertices[i]->HiresPosition[1] * ScaleFactor) >> 4;
             }
             else
             {
-                scaledPositions[i][0] = polygon->Vertices[i]->FinalPosition[0] * ScaleFactor;
+                if (WideMelon::Enabled())
+                    scaledPositions[i][0] = (s32)WideMelon::MapFinalX(polygon->Vertices[i]->FinalPosition[0], ScaleFactor);
+                else
+                    scaledPositions[i][0] = polygon->Vertices[i]->FinalPosition[0] * ScaleFactor;
                 scaledPositions[i][1] = polygon->Vertices[i]->FinalPosition[1] * ScaleFactor;
             }
             ytop = std::min(scaledPositions[i][1], ytop);

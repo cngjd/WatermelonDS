@@ -46,6 +46,8 @@ precision mediump float;
 precision mediump usampler2D;
 
 uniform uint u3DScale;
+uniform int uWideWidth;
+uniform int uWidePad;
 
 uniform usampler2D ScreenTex;
 uniform sampler2D _3DTex;
@@ -56,7 +58,15 @@ layout(location = 0) out vec4 oColor;
 
 void main()
 {
-    ivec4 pixel = ivec4(texelFetch(ScreenTex, ivec2(fTexcoord), 0));
+    // Wide view: fTexcoord.x spans 0..uWideWidth. Native 2D stays centered.
+    // Widescreen wings (extra 3D FOV) apply to the TOP screen only.
+    // Bottom/touch screen stays native 256px; side columns stay black.
+    int widePad = max(uWidePad, 0);
+    float nativeX = fTexcoord.x - float(widePad);
+    bool isTopScreen = (fTexcoord.y < 192.0);
+    bool outOfNative = (nativeX < 0.0) || (nativeX >= 256.0);
+    bool wing = isTopScreen && outOfNative;
+    vec2 nativeCoord = vec2(clamp(nativeX, 0.0, 255.0), fTexcoord.y);
 
     ivec4 mbright = ivec4(texelFetch(ScreenTex, ivec2(256*3, int(fTexcoord.y)), 0));
     int dispmode = mbright.b & 0x3;
@@ -65,11 +75,40 @@ void main()
     // mbright.b bit7 == HOFS bit8 (sign)
     float _3dxpos = float(mbright.a - ((mbright.b & 0x80) * 2));
 
-    if (dispmode == 1)
+    ivec4 pixel = ivec4(0);
+    if (!outOfNative)
+        pixel = ivec4(texelFetch(ScreenTex, ivec2(nativeCoord), 0));
+
+    // Sample 3D across the full wide coordinate space on the top screen only
+    float xpos3d = fTexcoord.x + (wing ? 0.0 : _3dxpos);
+    float ypos3d = mod(fTexcoord.y, 192.0);
+    ivec4 _3dpixWide = ivec4(0);
+    if (isTopScreen || !outOfNative)
+    {
+        _3dpixWide = ivec4(texelFetch(_3DTex, ivec2(vec2(xpos3d, ypos3d) * float(u3DScale)), 0).bgra
+                         * vec4(63,63,63,31));
+    }
+
+    if (wing)
+    {
+        // Top-screen side columns: reveal expanded 3D only (no 2D HUD)
+        if (_3dpixWide.a > 0)
+            pixel = _3dpixWide;
+        else
+            pixel = ivec4(0);
+        dispmode = 1; // apply brightness below using mbright from center scanline
+    }
+    else if (outOfNative)
+    {
+        // Bottom-screen side columns: keep black (no widescreen bleed)
+        pixel = ivec4(0);
+        dispmode = 0;
+    }
+    else if (dispmode == 1)
     {
         ivec4 val1 = pixel;
-        ivec4 val2 = ivec4(texelFetch(ScreenTex, ivec2(fTexcoord) + ivec2(256,0), 0));
-        ivec4 val3 = ivec4(texelFetch(ScreenTex, ivec2(fTexcoord) + ivec2(512,0), 0));
+        ivec4 val2 = ivec4(texelFetch(ScreenTex, ivec2(nativeCoord) + ivec2(256,0), 0));
+        ivec4 val3 = ivec4(texelFetch(ScreenTex, ivec2(nativeCoord) + ivec2(512,0), 0));
 
         int compmode = val3.a & 0xF;
         int eva, evb, evy;
@@ -77,11 +116,7 @@ void main()
         if (compmode == 4)
         {
             // 3D on top, blending
-
-            float xpos = fTexcoord.x + _3dxpos;
-            float ypos = mod(fTexcoord.y, 192.0);
-            ivec4 _3dpix = ivec4(texelFetch(_3DTex, ivec2(vec2(xpos, ypos) * float(u3DScale)), 0).bgra
-                         * vec4(63,63,63,31));
+            ivec4 _3dpix = _3dpixWide;
 
             if (_3dpix.a > 0)
             {
@@ -97,11 +132,7 @@ void main()
         else if (compmode == 1)
         {
             // 3D on bottom, blending
-
-            float xpos = fTexcoord.x + _3dxpos;
-            float ypos = mod(fTexcoord.y, 192.0);
-            ivec4 _3dpix = ivec4(texelFetch(_3DTex, ivec2(vec2(xpos, ypos)*float(u3DScale)), 0).bgra
-                         * vec4(63,63,63,31));
+            ivec4 _3dpix = _3dpixWide;
 
             if (_3dpix.a > 0)
             {
@@ -117,11 +148,7 @@ void main()
         else if (compmode <= 3)
         {
             // 3D on top, normal/fade
-
-            float xpos = fTexcoord.x + _3dxpos;
-            float ypos = mod(fTexcoord.y, 192.0);
-            ivec4 _3dpix = ivec4(texelFetch(_3DTex, ivec2(vec2(xpos, ypos)*float(u3DScale)), 0).bgra
-                         * vec4(63,63,63,31));
+            ivec4 _3dpix = _3dpixWide;
 
             if (_3dpix.a > 0)
             {
@@ -173,6 +200,8 @@ void main()
 const char* kCompositorFS_Linear = R"(#version 140
 
 uniform uint u3DScale;
+uniform int uWideWidth;
+uniform int uWidePad;
 
 uniform usampler2D ScreenTex;
 uniform sampler2D _3DTex;
@@ -443,6 +472,8 @@ precision mediump float;
 #endif
 
 uniform uint u3DScale;
+uniform int uWideWidth;
+uniform int uWidePad;
 
 uniform usampler2D ScreenTex;
 uniform sampler2D _3DTex;
