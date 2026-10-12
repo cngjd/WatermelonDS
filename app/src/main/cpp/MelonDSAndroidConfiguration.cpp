@@ -423,6 +423,12 @@ std::unique_ptr<MelonDSAndroid::RenderSettings> MelonDSAndroidConfiguration::bui
     if (videoFilteringObject != nullptr)
         env->DeleteLocalRef(videoFilteringObject);
     jint internalResolutionScaling = env->CallIntMethod(renderSettings, getResolutionScalingMethod);
+    jint widescreenViewWidth = 256;
+    jmethodID getWidescreenViewWidthMethod = env->GetMethodID(renderSettingsClass, "getEffectiveWidescreenViewWidth", "()I");
+    if (getWidescreenViewWidthMethod != nullptr)
+        widescreenViewWidth = env->CallIntMethod(renderSettings, getWidescreenViewWidthMethod);
+    else
+        env->ExceptionClear();
 
     bool vulkanBetterPolygons = true;
     (void)internalResolutionScaling;
@@ -444,6 +450,7 @@ std::unique_ptr<MelonDSAndroid::RenderSettings> MelonDSAndroidConfiguration::bui
             MelonDSAndroid::OpenGlRenderSettings {
                 .betterPolygons = false,
                 .scale = internalResolutionScaling,
+                .viewWidth = widescreenViewWidth,
                 .rendererDebugToolsEnabled = rendererDebugToolsEnabled != 0,
                 .rendererDebugBgObjEnabled = rendererDebugBgObjEnabled != 0,
                 .rendererDebugLatchTraceEnabled = rendererDebugLatchTraceEnabled != 0,
@@ -482,6 +489,7 @@ std::unique_ptr<MelonDSAndroid::RenderSettings> MelonDSAndroidConfiguration::bui
             MelonDSAndroid::ComputeRenderSettings {
                 .scale = internalResolutionScaling,
                 .highResCoordinates = true,
+                .viewWidth = widescreenViewWidth,
             }
         );
     }
