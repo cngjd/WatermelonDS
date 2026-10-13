@@ -63,6 +63,7 @@ set(VULKAN_SHADER_SOURCES
         "${ANDROID_CPP_DIR}/renderer/VulkanFaithfulShader.comp"
         "${ANDROID_CPP_DIR}/renderer/VulkanFaithfulObjScanlineShader.comp"
         "${ANDROID_CPP_DIR}/renderer/VulkanRenderer3dNativeProjectionShader.comp"
+        "${ANDROID_CPP_DIR}/renderer/VulkanWideMelonWingsShader.comp"
         "${ANDROID_CPP_DIR}/renderer/VulkanSurfacePresenter.vert"
         "${ANDROID_CPP_DIR}/renderer/VulkanSurfacePresenter.frag"
 )
@@ -89,6 +90,7 @@ set(VULKAN_SHADER_HEADERS
         "${ANDROID_CPP_DIR}/renderer/VulkanFaithfulShaderData.h"
         "${ANDROID_CPP_DIR}/renderer/VulkanFaithfulObjScanlineShaderData.h"
         "${ANDROID_CPP_DIR}/renderer/VulkanRenderer3dNativeProjectionShaderData.h"
+        "${ANDROID_CPP_DIR}/renderer/VulkanWideMelonWingsShaderData.h"
         "${ANDROID_CPP_DIR}/renderer/VulkanSurfacePresenterVertexShaderData.h"
         "${ANDROID_CPP_DIR}/renderer/VulkanSurfacePresenterFragmentShaderData.h"
 )

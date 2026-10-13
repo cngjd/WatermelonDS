@@ -244,6 +244,10 @@ private:
         u64 frameCount = 0;
         bool pendingClearHistory = false;
         bool initialized = false;
+        // WideMelon: where each filtered screen sits in atlasOutput (u0, u1, v0, v1), set when the atlas is wide
+        bool wideMelonAtlas = false;
+        float topAtlasUv[4] = {};
+        float bottomAtlasUv[4] = {};
     };
 
     struct RetroArchSizing
@@ -265,6 +269,17 @@ private:
         u32 outputAtlasHeight = 0;
         u32 inputBottomOffsetY = 0;
         u32 outputBottomOffsetY = 0;
+        // WideMelon: the top screen chain runs at the wide width; the bottom chain keeps the native screen (the
+        // fields above), read from the center of the wide frame and stored centered in the output atlas.
+        u32 wideMelonWidth = 256;
+        u32 topSourceScreenWidth = 0;
+        u32 topInputScreenWidth = 0;
+        u32 topOutputScreenWidth = 0;
+        u32 topOutputScreenHeight = 0;
+        u32 bottomInputOffsetX = 0;
+        u32 bottomOutputOffsetX = 0;
+        bool topVisible = true;
+        bool bottomVisible = true;
     };
 
     struct DescriptorSetCacheState
@@ -324,6 +339,8 @@ private:
 
         VkDescriptorSet screenDescriptorSet = VK_NULL_HANDLE;
         VkDescriptorSet backgroundDescriptorSet = VK_NULL_HANDLE;
+        // WideMelon: screenDescriptorSet with the widescreen wings as the sampled texture
+        VkDescriptorSet wideMelonWingsDescriptorSet = VK_NULL_HANDLE;
 
         VkBuffer vertexBuffer = VK_NULL_HANDLE;
         VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
@@ -342,6 +359,8 @@ private:
         DescriptorSetCacheState backgroundDescriptorCache{};
         bool cachedDirectPresent = false;
         bool cachedRetroArchApplied = false;
+        u32 cachedWideMelonWidth = 256u;
+        u32 cachedWideMelonWingsTextureWidth = 0u;
         bool cachedFastHighresOnlyTop = false;
         bool cachedFastHighresOnlyBottom = false;
         bool cachedFastHighresOverlay2DTop = false;
@@ -448,8 +467,14 @@ private:
         const VulkanCompositionInputs& inputs,
         bool directPresent,
         bool retroArchApplied,
+        u32 wideMelonWidth,
+        u32 wideMelonWingsTextureWidth,
         std::vector<DrawCall>& drawCalls
     );
+    bool updateWideMelonWingsDescriptorSet(
+        SurfaceState& surfaceState,
+        VkImageView wingsImageView,
+        VulkanFilterMode filtering);
     bool recordSurfaceCommands(
         SurfaceState& surfaceState,
         VkFramebuffer framebuffer,
@@ -481,14 +506,18 @@ private:
         u32 outputScreenWidth,
         u32 outputScreenHeight,
         u32 outputAtlasWidth,
-        u32 outputAtlasHeight);
+        u32 outputAtlasHeight,
+        u32 topSourceScreenWidth,
+        u32 topOutputScreenWidth,
+        u32 topOutputScreenHeight);
     void destroyRetroArchResources(SurfaceState& surfaceState);
     bool createRetroArchImage(
         RetroArchImageResource& resource,
         u32 width,
         u32 height);
     void destroyRetroArchImage(RetroArchImageResource& resource);
-    RetroArchSizing calculateRetroArchSizing(const SurfaceState& surfaceState, u32 atlasWidth, u32 atlasHeight) const;
+    RetroArchSizing calculateRetroArchSizing(const SurfaceState& surfaceState, u32 atlasWidth, u32 atlasHeight,
+                                             u32 wideMelonWidth) const;
     void logRetroArchSizingIfNeeded(SurfaceState& surfaceState, const RetroArchSizing& sizing, u32 atlasWidth, u32 atlasHeight);
     bool runRetroArchFilter(
         SurfaceState& surfaceState,
@@ -496,6 +525,9 @@ private:
         VkImageView sourceAtlasImageView,
         u32 atlasWidth,
         u32 atlasHeight,
+        u32 wideMelonWidth,
+        VkImage wingsImage,
+        u32 wingsTextureWidth,
         VkImage& outputImage,
         VkImageView& outputImageView);
 

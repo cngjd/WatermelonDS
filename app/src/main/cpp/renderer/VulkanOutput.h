@@ -564,6 +564,10 @@ public:
         PreparedSoftPackedFrameDebugView& outView) const;
     [[nodiscard]] VkImage getFrameImage(const Frame* frame) const;
     [[nodiscard]] VkImageView getFrameImageView(const Frame* frame) const;
+    // WideMelon: this frame's widescreen wings (top screen side columns, left strip then right strip, BGR, 192 x
+    // scale rows) when they were composed; getFrameImage() stays the native 4:3 frame.
+    bool getFrameWideMelonWings(const Frame* frame, VkImage& image, VkImageView& view, u32& dsWidth,
+                                u32& textureWidth) const;
     VulkanOutputTemporalStats takeTemporalStatsSnapshotAndReset();
 private:
     static constexpr size_t kPackedScreenWordCount =
@@ -647,6 +651,24 @@ private:
         VkDeviceMemory renderer3dSnapshotMemory{VK_NULL_HANDLE};
         u32 snapshotWidth{};
         u32 snapshotHeight{};
+
+        // WideMelon: copy of the wide 3D render's wing strips (output scale) and the wings built from it
+        VkImage wideMelon3d{VK_NULL_HANDLE};
+        VkImageView wideMelon3dView{VK_NULL_HANDLE};
+        VkDeviceMemory wideMelon3dMemory{VK_NULL_HANDLE};
+        u32 wideMelon3dWidth{};
+        u32 wideMelon3dHeight{};
+        bool wideMelon3dLayoutInitialized{};
+        bool wideMelon3dValid{};
+        VkImage wideMelonOut{VK_NULL_HANDLE};
+        VkImageView wideMelonOutView{VK_NULL_HANDLE};
+        VkDeviceMemory wideMelonOutMemory{VK_NULL_HANDLE};
+        u32 wideMelonOutWidth{};
+        u32 wideMelonOutHeight{};
+        u32 wideMelonOutDsWidth{256u};
+        bool wideMelonOutValid{};
+        VkDescriptorPool wideMelonDescriptorPool{VK_NULL_HANDLE};
+        VkDescriptorSet wideMelonDescriptorSet{VK_NULL_HANDLE};
 
         bool renderer3dSnapshotLayoutInitialized{};
         Renderer3dSnapshotState renderer3dSnapshotState{
@@ -1139,6 +1161,9 @@ private:
     VkDescriptorSetLayout renderer3dNativeProjectionSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout renderer3dNativeProjectionPipeLayout = VK_NULL_HANDLE;
     VkPipeline renderer3dNativeProjectionPipeline = VK_NULL_HANDLE;
+    VkDescriptorSetLayout wideMelonWingsSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout wideMelonWingsPipeLayout = VK_NULL_HANDLE;
+    VkPipeline wideMelonWingsPipeline = VK_NULL_HANDLE;
     u64 renderer3dNativeProjectionPipelineGeneration = 0u;
 
     bool faithfulPipelineReady = false;
@@ -1198,6 +1223,13 @@ private:
         bool snapshotScreenSwap,
         bool preferPinnedCaptureSource);
     bool recordRenderer3dLiveSourcePrep(FrameResource& resource, melonDS::VulkanRenderer3D& renderer3D, bool sourceScreenSwap);
+    // WideMelon
+    bool createWideMelonImage(u32 width, u32 height, VkImage& image, VkDeviceMemory& memory, VkImageView& view);
+    void destroyWideMelonResources(FrameResource& resource);
+    bool ensureWideMelonWingsPipeline();
+    void destroyWideMelonWingsPipeline();
+    void recordWideMelon3dCopy(FrameResource& resource, const melonDS::VulkanRenderer3D& renderer3D);
+    void recordWideMelonWings(FrameResource& resource, FrameResource* source3d);
     void releaseRetainedRenderer3dSource(FrameResource& resource);
     bool dispatchCompositor(Frame* frame, FrameResource& resource, const VulkanCompositionInputs& inputs);
     void consumeFrameGpuTiming(FrameResource& resource);

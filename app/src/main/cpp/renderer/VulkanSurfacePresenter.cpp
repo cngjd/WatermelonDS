@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <mutex>
 #include <vector>
@@ -12,6 +13,7 @@
 #include "VulkanContext.h"
 #include "VulkanDispatch.h"
 #include "VulkanOutput.h"
+#include "WideMelon.h"
 #include "VulkanSurfacePresenterFragmentShaderData.h"
 #include "VulkanSurfacePresenterVertexShaderData.h"
 #include "renderer/RetroArchOutputScale.h"
@@ -1260,6 +1262,7 @@ VulkanPresentationResult VulkanSurfacePresenter::presentFrame(
         && !postProcessFilterRequested
         && surfaces.size() == 1
         && hasRequiredDirectHandles
+        && !WideMelon::Enabled() // the widescreen frame only exists in the composed output
         && directPresentHasDualScreen3dSource
         && directPresentHasReadyHistory
         && !inputs.capture3dSourceValid;
@@ -1592,9 +1595,26 @@ VulkanPresentationResult VulkanSurfacePresenter::presentFrame(
             sampledImageView = frameImageView;
         }
 
+        // WideMelon: the top screen is drawn wider, from the native frame plus the wings image. RetroArch presets run
+        // the top screen at the wide width; the built-in post-process filters assume 256, so they fall back to plain
+        // sampling.
+        VkImage wingsImage = VK_NULL_HANDLE;
+        VkImageView wingsImageView = VK_NULL_HANDLE;
+        u32 wideMelonWidth = 256u;
+        u32 wingsTextureWidth = 0u;
+        if (!directPresent
+            && !output.getFrameWideMelonWings(frame, wingsImage, wingsImageView, wideMelonWidth, wingsTextureWidth))
+        {
+            wideMelonWidth = 256u;
+        }
         bool retroArchApplied = false;
         VulkanFilterMode effectiveFiltering = surfaceState.config.filtering;
-        if (surfaceState.config.filtering == VulkanFilterMode::RetroArch && !directPresent)
+        if (wideMelonWidth > 256u && effectiveFiltering != VulkanFilterMode::RetroArch
+            && IsVulkanPostProcessFilter(effectiveFiltering))
+        {
+            effectiveFiltering = VulkanFilterMode::Nearest;
+        }
+        else if (surfaceState.config.filtering == VulkanFilterMode::RetroArch && !directPresent)
         {
             VkImage retroImage = VK_NULL_HANDLE;
             VkImageView retroImageView = VK_NULL_HANDLE;
@@ -1604,6 +1624,9 @@ VulkanPresentationResult VulkanSurfacePresenter::presentFrame(
                     sampledImageView,
                     frame->width,
                     frame->height,
+                    wideMelonWidth,
+                    wingsImage,
+                    wingsTextureWidth,
                     retroImage,
                     retroImageView))
             {
@@ -1626,6 +1649,12 @@ VulkanPresentationResult VulkanSurfacePresenter::presentFrame(
             recordDeferredResult(VulkanPresentationResult::FatalError);
             continue;
         }
+        if (wideMelonWidth > 256u && !retroArchApplied
+            && !updateWideMelonWingsDescriptorSet(surfaceState, wingsImageView, effectiveFiltering))
+        {
+            // No wings descriptor: show the top screen at 4:3
+            wideMelonWidth = 256u;
+        }
         descriptorCpuNs += PerfNowNs() - descriptorStartNs;
 
         std::vector<DrawCall> drawCalls;
@@ -1637,6 +1666,8 @@ VulkanPresentationResult VulkanSurfacePresenter::presentFrame(
                 inputs,
                 directPresent,
                 retroArchApplied,
+                wideMelonWidth,
+                wingsTextureWidth,
                 drawCalls))
         {
             vertexUpdateFailures++;
@@ -2614,6 +2645,9 @@ void VulkanSurfacePresenter::destroySurfaceStateResources(SurfaceState& surfaceS
         vkFreeDescriptorSets(device, descriptorPool, 1, &surfaceState.screenDescriptorSet);
     if (surfaceState.backgroundDescriptorSet != VK_NULL_HANDLE)
         vkFreeDescriptorSets(device, descriptorPool, 1, &surfaceState.backgroundDescriptorSet);
+    if (surfaceState.wideMelonWingsDescriptorSet != VK_NULL_HANDLE)
+        vkFreeDescriptorSets(device, descriptorPool, 1, &surfaceState.wideMelonWingsDescriptorSet);
+    surfaceState.wideMelonWingsDescriptorSet = VK_NULL_HANDLE;
 
     if (surfaceState.imageAvailableSemaphore != VK_NULL_HANDLE)
         vkDestroySemaphore(device, surfaceState.imageAvailableSemaphore, nullptr);
@@ -3744,10 +3778,35 @@ void VulkanSurfacePresenter::destroyRetroArchImage(RetroArchImageResource& resou
     resource = {};
 }
 
+// WideMelon: same rule as ScreenTextureUVs.widenTopScreenRect (OpenGL): grow the top screen around its center by
+// width/256; if it no longer fits, shrink a 4:3 rect uniformly or clamp a stretched one to the surface width.
+static VulkanPresenterRect widenWideMelonTopRect(const VulkanPresenterRect& rect, u32 wideMelonWidth, float surfaceWidth)
+{
+    float newWidth = static_cast<float>(rect.width) * static_cast<float>(wideMelonWidth) / 256.0f;
+    float newHeight = static_cast<float>(rect.height);
+    if (newWidth > surfaceWidth)
+    {
+        const float rectAspectRatio = static_cast<float>(rect.width) / static_cast<float>(rect.height);
+        if (std::abs(rectAspectRatio / (256.0f / 192.0f) - 1.0f) < 0.02f)
+            newHeight *= surfaceWidth / newWidth;
+        newWidth = surfaceWidth;
+    }
+    const float centerX = static_cast<float>(rect.x) + static_cast<float>(rect.width) / 2.0f;
+    const float centerY = static_cast<float>(rect.y) + static_cast<float>(rect.height) / 2.0f;
+    VulkanPresenterRect wide = rect;
+    wide.width = static_cast<int>(std::lround(newWidth));
+    wide.height = static_cast<int>(std::lround(newHeight));
+    wide.x = std::clamp(static_cast<int>(std::lround(centerX - newWidth / 2.0f)),
+                        0, std::max(0, static_cast<int>(surfaceWidth) - wide.width));
+    wide.y = static_cast<int>(std::lround(centerY - newHeight / 2.0f));
+    return wide;
+}
+
 VulkanSurfacePresenter::RetroArchSizing VulkanSurfacePresenter::calculateRetroArchSizing(
     const SurfaceState& surfaceState,
     u32 atlasWidth,
-    u32 atlasHeight) const
+    u32 atlasHeight,
+    u32 wideMelonWidth) const
 {
     RetroArchSizing sizing{};
     sizing.nativeDisplayMode = surfaceState.config.retroShaderSourceResolution == RetroArchSourceResolution::Native;
@@ -3771,6 +3830,7 @@ VulkanSurfacePresenter::RetroArchSizing VulkanSurfacePresenter::calculateRetroAr
     includeRect(surfaceState.config.hybridTopScreen, surfaceState.config.hybridAlpha);
     includeRect(surfaceState.config.hybridBottomScreen, surfaceState.config.hybridAlpha);
 
+    const bool wide = wideMelonWidth > kNativeScreenWidth;
     const RetroArchOutputSize output = computeRetroArchOutputSize(
         sizing.maxLayoutWidth,
         sizing.maxLayoutHeight,
@@ -3788,6 +3848,61 @@ VulkanSurfacePresenter::RetroArchSizing VulkanSurfacePresenter::calculateRetroAr
     sizing.requestedOutputWidth = output.requestedWidth;
     sizing.requestedOutputHeight = output.requestedHeight;
     sizing.clamped = output.clamped;
+
+    sizing.wideMelonWidth = wide ? wideMelonWidth : kNativeScreenWidth;
+    sizing.topInputScreenWidth = sizing.inputScreenWidth;
+    sizing.topSourceScreenWidth = sizing.sourceScreenWidth;
+    sizing.topOutputScreenWidth = sizing.outputScreenWidth;
+    sizing.topOutputScreenHeight = sizing.outputScreenHeight;
+    if (wide)
+    {
+        // WideMelon: each chain is sized for the rect it is drawn into (the widened top rect, the bottom rect), so the
+        // filtered output maps 1:1 to the screen. Chains for screens this surface doesn't show are skipped.
+        const float surfaceWidth = static_cast<float>(std::max(1u, surfaceState.logicalExtent.width));
+        u32 topWidth = 0, topHeight = 0, bottomWidth = 0, bottomHeight = 0;
+        const auto include = [](const VulkanPresenterRect& rect, float alpha, u32& width, u32& height) {
+            if (!rect.enabled || rect.width <= 0 || rect.height <= 0 || alpha <= 0.0f)
+                return;
+            width = std::max(width, static_cast<u32>(rect.width));
+            height = std::max(height, static_cast<u32>(rect.height));
+        };
+        const VulkanSurfaceConfig& config = surfaceState.config;
+        if (config.topScreen.enabled && config.topScreen.width > 0 && config.topScreen.height > 0)
+            include(widenWideMelonTopRect(config.topScreen, wideMelonWidth, surfaceWidth), config.topAlpha,
+                    topWidth, topHeight);
+        if (config.hybridTopScreen.enabled && config.hybridTopScreen.width > 0)
+        {
+            // Hybrid slots show the native center of the top output: size the whole output so that center fits
+            VulkanPresenterRect hybrid = config.hybridTopScreen;
+            hybrid.width = hybrid.width * static_cast<int>(wideMelonWidth) / static_cast<int>(kNativeScreenWidth);
+            include(hybrid, config.hybridAlpha, topWidth, topHeight);
+        }
+        include(config.bottomScreen, config.bottomAlpha, bottomWidth, bottomHeight);
+        include(config.hybridBottomScreen, config.hybridAlpha, bottomWidth, bottomHeight);
+        sizing.topVisible = topWidth > 0;
+        sizing.bottomVisible = bottomWidth > 0;
+
+        sizing.topInputScreenWidth = wideMelonWidth * sizing.inputScale;
+        sizing.topSourceScreenWidth = sizing.nativeDisplayMode ? wideMelonWidth : sizing.topInputScreenWidth;
+        sizing.bottomInputOffsetX = 0u; // the frame image is native; the wings come separately
+
+        const u32 passes = surfaceState.config.retroShaderPassCount;
+        const RetroArchOutputSize topOutput = computeRetroArchOutputSize(
+            topWidth, topHeight, sizing.topInputScreenWidth, sizing.inputScreenHeight, passes);
+        const RetroArchOutputSize bottomOutput = computeRetroArchOutputSize(
+            bottomWidth, bottomHeight, sizing.inputScreenWidth, sizing.inputScreenHeight, passes);
+        sizing.topOutputScreenWidth = topOutput.screenWidth;
+        sizing.topOutputScreenHeight = topOutput.screenHeight;
+        sizing.outputScreenWidth = bottomOutput.screenWidth;
+        sizing.outputScreenHeight = bottomOutput.screenHeight;
+        sizing.clamped = topOutput.clamped || bottomOutput.clamped;
+
+        const u32 gap = std::max(1u, (sizing.topOutputScreenHeight + 48u) / 96u);
+        sizing.bottomOutputOffsetX = 0u;
+        sizing.outputBottomOffsetY = sizing.topOutputScreenHeight + gap;
+        sizing.outputAtlasWidth = std::max(sizing.topOutputScreenWidth, sizing.outputScreenWidth);
+        sizing.outputAtlasHeight = sizing.outputBottomOffsetY + sizing.outputScreenHeight;
+    }
 
     return sizing;
 }
@@ -3858,13 +3973,16 @@ bool VulkanSurfacePresenter::ensureRetroArchResources(
     u32 outputScreenWidth,
     u32 outputScreenHeight,
     u32 outputAtlasWidth,
-    u32 outputAtlasHeight)
+    u32 outputAtlasHeight,
+    u32 topSourceScreenWidth,
+    u32 topOutputScreenWidth,
+    u32 topOutputScreenHeight)
 {
     RetroArchResources& retro = surfaceState.retroArch;
     const bool sizeMatches =
-        retro.topInput.width == sourceScreenWidth && retro.topInput.height == sourceScreenHeight
+        retro.topInput.width == topSourceScreenWidth && retro.topInput.height == sourceScreenHeight
         && retro.bottomInput.width == sourceScreenWidth && retro.bottomInput.height == sourceScreenHeight
-        && retro.topOutput.width == outputScreenWidth && retro.topOutput.height == outputScreenHeight
+        && retro.topOutput.width == topOutputScreenWidth && retro.topOutput.height == topOutputScreenHeight
         && retro.bottomOutput.width == outputScreenWidth && retro.bottomOutput.height == outputScreenHeight
         && retro.atlasOutput.width == outputAtlasWidth && retro.atlasOutput.height == outputAtlasHeight;
 
@@ -3903,9 +4021,9 @@ bool VulkanSurfacePresenter::ensureRetroArchResources(
     if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &retro.filterFinishedSemaphore) != VK_SUCCESS)
         return false;
 
-    if (!createRetroArchImage(retro.topInput, sourceScreenWidth, sourceScreenHeight)
+    if (!createRetroArchImage(retro.topInput, topSourceScreenWidth, sourceScreenHeight)
         || !createRetroArchImage(retro.bottomInput, sourceScreenWidth, sourceScreenHeight)
-        || !createRetroArchImage(retro.topOutput, outputScreenWidth, outputScreenHeight)
+        || !createRetroArchImage(retro.topOutput, topOutputScreenWidth, topOutputScreenHeight)
         || !createRetroArchImage(retro.bottomOutput, outputScreenWidth, outputScreenHeight)
         || !createRetroArchImage(retro.atlasOutput, outputAtlasWidth, outputAtlasHeight))
     {
@@ -3947,6 +4065,9 @@ bool VulkanSurfacePresenter::runRetroArchFilter(
     VkImageView sourceAtlasImageView,
     u32 atlasWidth,
     u32 atlasHeight,
+    u32 wideMelonWidth,
+    VkImage wingsImage,
+    u32 wingsTextureWidth,
     VkImage& outputImage,
     VkImageView& outputImageView)
 {
@@ -3963,7 +4084,9 @@ bool VulkanSurfacePresenter::runRetroArchFilter(
         return false;
     }
 
-    const RetroArchSizing sizing = calculateRetroArchSizing(surfaceState, atlasWidth, atlasHeight);
+    if (wingsImage == VK_NULL_HANDLE || wingsTextureWidth == 0u)
+        wideMelonWidth = kNativeScreenWidth;
+    const RetroArchSizing sizing = calculateRetroArchSizing(surfaceState, atlasWidth, atlasHeight, wideMelonWidth);
     if (sizing.sourceScreenWidth == 0
         || sizing.sourceScreenHeight == 0
         || sizing.inputScreenWidth == 0
@@ -4002,7 +4125,10 @@ bool VulkanSurfacePresenter::runRetroArchFilter(
             sizing.outputScreenWidth,
             sizing.outputScreenHeight,
             sizing.outputAtlasWidth,
-            sizing.outputAtlasHeight))
+            sizing.outputAtlasHeight,
+            sizing.topSourceScreenWidth,
+            sizing.topOutputScreenWidth,
+            sizing.topOutputScreenHeight))
     {
         melonDS::Platform::Log(
             melonDS::Platform::LogLevel::Warn,
@@ -4046,10 +4172,10 @@ bool VulkanSurfacePresenter::runRetroArchFilter(
     if (!consumedPrewarmedChains
         && (!retro.topChain.configure(
                 surfaceState.config.retroShaderPresetPath,
-                sizing.sourceScreenWidth,
+                sizing.topSourceScreenWidth,
                 sizing.sourceScreenHeight,
-                sizing.outputScreenWidth,
-                sizing.outputScreenHeight,
+                sizing.topOutputScreenWidth,
+                sizing.topOutputScreenHeight,
                 surfaceState.config.retroShaderParameterOverrides)
             || !retro.bottomChain.configure(
                 surfaceState.config.retroShaderPresetPath,
@@ -4170,20 +4296,20 @@ bool VulkanSurfacePresenter::runRetroArchFilter(
         vkCmdPipelineBarrier(retro.commandBuffer, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
     };
 
-    auto copyScreenInput = [&](RetroArchImageResource& dst, u32 srcY) {
+    auto copyScreenInput = [&](RetroArchImageResource& dst, u32 srcX, u32 srcY, u32 srcWidth, u32 dstWidth) {
         VkImageBlit blit{};
         blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         blit.srcSubresource.layerCount = 1;
-        blit.srcOffsets[0] = {0, static_cast<int32_t>(srcY), 0};
+        blit.srcOffsets[0] = {static_cast<int32_t>(srcX), static_cast<int32_t>(srcY), 0};
         blit.srcOffsets[1] = {
-            static_cast<int32_t>(sizing.inputScreenWidth),
+            static_cast<int32_t>(srcX + srcWidth),
             static_cast<int32_t>(srcY + sizing.inputScreenHeight),
             1};
         blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         blit.dstSubresource.layerCount = 1;
         blit.dstOffsets[0] = {0, 0, 0};
         blit.dstOffsets[1] = {
-            static_cast<int32_t>(sizing.sourceScreenWidth),
+            static_cast<int32_t>(dstWidth),
             static_cast<int32_t>(sizing.sourceScreenHeight),
             1};
         vkCmdBlitImage(
@@ -4214,8 +4340,52 @@ bool VulkanSurfacePresenter::runRetroArchFilter(
 
     imageBarrier(retro.topInput, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
     imageBarrier(retro.bottomInput, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-    copyScreenInput(retro.topInput, 0);
-    copyScreenInput(retro.bottomInput, sizing.inputBottomOffsetY);
+    const bool wideTopInput = sizing.wideMelonWidth > kNativeScreenWidth;
+    if (sizing.topVisible && wideTopInput)
+    {
+        // WideMelon: compose the wide top input from the native frame (center) and the wings image (sides)
+        const u32 dstScale = std::max(1u, sizing.topSourceScreenWidth / sizing.wideMelonWidth);
+        const u32 pad = (sizing.wideMelonWidth - kNativeScreenWidth) / 2u;
+        const u32 halfWings = wingsTextureWidth / 2u;
+        const auto blitRegion = [&](VkImage src, VkImageLayout srcLayout, u32 srcX0, u32 srcX1, u32 dstX0, u32 dstX1) {
+            VkImageBlit blit{};
+            blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            blit.srcSubresource.layerCount = 1;
+            blit.srcOffsets[0] = {static_cast<int32_t>(srcX0), 0, 0};
+            blit.srcOffsets[1] = {static_cast<int32_t>(srcX1), static_cast<int32_t>(sizing.inputScreenHeight), 1};
+            blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            blit.dstSubresource.layerCount = 1;
+            blit.dstOffsets[0] = {static_cast<int32_t>(dstX0), 0, 0};
+            blit.dstOffsets[1] = {static_cast<int32_t>(dstX1), static_cast<int32_t>(sizing.sourceScreenHeight), 1};
+            vkCmdBlitImage(retro.commandBuffer, src, srcLayout, retro.topInput.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+        };
+        blitRegion(sourceAtlasImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   0u, sizing.inputScreenWidth, pad * dstScale, (pad + kNativeScreenWidth) * dstScale);
+
+        VkImageMemoryBarrier wingsReadable{};
+        wingsReadable.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        wingsReadable.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        wingsReadable.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        wingsReadable.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        wingsReadable.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        wingsReadable.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        wingsReadable.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        wingsReadable.image = wingsImage;
+        wingsReadable.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(retro.commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &wingsReadable);
+        blitRegion(wingsImage, VK_IMAGE_LAYOUT_GENERAL, 0u, halfWings, 0u, pad * dstScale);
+        blitRegion(wingsImage, VK_IMAGE_LAYOUT_GENERAL, halfWings, wingsTextureWidth,
+                   (pad + kNativeScreenWidth) * dstScale, sizing.wideMelonWidth * dstScale);
+    }
+    else if (sizing.topVisible)
+    {
+        copyScreenInput(retro.topInput, 0, 0, sizing.topInputScreenWidth, sizing.topSourceScreenWidth);
+    }
+    if (sizing.bottomVisible)
+        copyScreenInput(retro.bottomInput, sizing.bottomInputOffsetX, sizing.inputBottomOffsetY,
+                        sizing.inputScreenWidth, sizing.sourceScreenWidth);
 
     sourceAtlasBarrier(
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -4230,29 +4400,31 @@ bool VulkanSurfacePresenter::runRetroArchFilter(
     imageBarrier(retro.topOutput, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
     imageBarrier(retro.bottomOutput, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
 
-    if (!retro.topChain.recordFrame(retro.commandBuffer, retro.topInput.image, retro.topOutput.image, retro.frameCount, clearHistory, 16)
-        || !retro.bottomChain.recordFrame(retro.commandBuffer, retro.bottomInput.image, retro.bottomOutput.image, retro.frameCount, clearHistory, 16))
+    if ((sizing.topVisible
+            && !retro.topChain.recordFrame(retro.commandBuffer, retro.topInput.image, retro.topOutput.image, retro.frameCount, clearHistory, 16))
+        || (sizing.bottomVisible
+            && !retro.bottomChain.recordFrame(retro.commandBuffer, retro.bottomInput.image, retro.bottomOutput.image, retro.frameCount, clearHistory, 16)))
         return false;
 
     imageBarrier(retro.atlasOutput, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
     imageBarrier(retro.topOutput, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
     imageBarrier(retro.bottomOutput, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
-    auto copyFilteredScreen = [&](RetroArchImageResource& src, u32 dstY) {
+    auto copyFilteredScreen = [&](RetroArchImageResource& src, u32 dstX, u32 dstY, u32 width, u32 height) {
         VkImageBlit blit{};
         blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         blit.srcSubresource.layerCount = 1;
         blit.srcOffsets[0] = {0, 0, 0};
         blit.srcOffsets[1] = {
-            static_cast<int32_t>(sizing.outputScreenWidth),
-            static_cast<int32_t>(sizing.outputScreenHeight),
+            static_cast<int32_t>(width),
+            static_cast<int32_t>(height),
             1};
         blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         blit.dstSubresource.layerCount = 1;
-        blit.dstOffsets[0] = {0, static_cast<int32_t>(dstY), 0};
+        blit.dstOffsets[0] = {static_cast<int32_t>(dstX), static_cast<int32_t>(dstY), 0};
         blit.dstOffsets[1] = {
-            static_cast<int32_t>(sizing.outputScreenWidth),
-            static_cast<int32_t>(dstY + sizing.outputScreenHeight),
+            static_cast<int32_t>(dstX + width),
+            static_cast<int32_t>(dstY + height),
             1};
         vkCmdBlitImage(
             retro.commandBuffer,
@@ -4264,14 +4436,43 @@ bool VulkanSurfacePresenter::runRetroArchFilter(
             &blit,
             VK_FILTER_NEAREST);
     };
-    copyFilteredScreen(retro.topOutput, 0);
-    copyFilteredScreen(retro.bottomOutput, sizing.outputBottomOffsetY);
+    if (sizing.topVisible)
+        copyFilteredScreen(retro.topOutput, 0, 0, sizing.topOutputScreenWidth, sizing.topOutputScreenHeight);
+    if (sizing.bottomVisible)
+        copyFilteredScreen(retro.bottomOutput, sizing.bottomOutputOffsetX, sizing.outputBottomOffsetY,
+                           sizing.outputScreenWidth, sizing.outputScreenHeight);
     imageBarrier(retro.atlasOutput, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
     imageBarrier(retro.topOutput, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
     imageBarrier(retro.bottomOutput, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
 
     if (!submitFilter())
         return false;
+
+    const bool wideAtlas = sizing.wideMelonWidth > kNativeScreenWidth;
+    float topUv[4] = {};
+    float bottomUv[4] = {};
+    if (wideAtlas)
+    {
+        const float atlasW = static_cast<float>(sizing.outputAtlasWidth);
+        const float atlasH = static_cast<float>(sizing.outputAtlasHeight);
+        topUv[0] = 0.0f;
+        topUv[1] = static_cast<float>(sizing.topOutputScreenWidth) / atlasW;
+        topUv[2] = 0.0f;
+        topUv[3] = static_cast<float>(sizing.topOutputScreenHeight) / atlasH;
+        bottomUv[0] = static_cast<float>(sizing.bottomOutputOffsetX) / atlasW;
+        bottomUv[1] = static_cast<float>(sizing.bottomOutputOffsetX + sizing.outputScreenWidth) / atlasW;
+        bottomUv[2] = static_cast<float>(sizing.outputBottomOffsetY) / atlasH;
+        bottomUv[3] = static_cast<float>(sizing.outputBottomOffsetY + sizing.outputScreenHeight) / atlasH;
+    }
+    if (retro.wideMelonAtlas != wideAtlas
+        || std::memcmp(retro.topAtlasUv, topUv, sizeof(topUv)) != 0
+        || std::memcmp(retro.bottomAtlasUv, bottomUv, sizeof(bottomUv)) != 0)
+    {
+        retro.wideMelonAtlas = wideAtlas;
+        std::memcpy(retro.topAtlasUv, topUv, sizeof(topUv));
+        std::memcpy(retro.bottomAtlasUv, bottomUv, sizeof(bottomUv));
+        surfaceState.vertexBufferDirty = true;
+    }
 
     outputImage = retro.atlasOutput.image;
     outputImageView = retro.atlasOutput.imageView;
@@ -4490,6 +4691,58 @@ bool VulkanSurfacePresenter::createTextureFromPixels(BackgroundResource& resourc
 
     resource.width = backgroundImage.width;
     resource.height = backgroundImage.height;
+    return true;
+}
+
+bool VulkanSurfacePresenter::updateWideMelonWingsDescriptorSet(
+    SurfaceState& surfaceState,
+    VkImageView wingsImageView,
+    VulkanFilterMode filtering)
+{
+    if (wingsImageView == VK_NULL_HANDLE || surfaceState.screenDescriptorSet == VK_NULL_HANDLE)
+        return false;
+
+    if (surfaceState.wideMelonWingsDescriptorSet == VK_NULL_HANDLE)
+    {
+        VkDescriptorSetAllocateInfo allocateInfo{};
+        allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocateInfo.descriptorPool = descriptorPool;
+        allocateInfo.descriptorSetCount = 1;
+        allocateInfo.pSetLayouts = &descriptorSetLayout;
+        if (vkAllocateDescriptorSets(device, &allocateInfo, &surfaceState.wideMelonWingsDescriptorSet) != VK_SUCCESS)
+        {
+            surfaceState.wideMelonWingsDescriptorSet = VK_NULL_HANDLE;
+            return false;
+        }
+    }
+
+    // Same bindings as the screen set (all statically used by the fragment shader), with the wings as the texture
+    constexpr u32 kBindingCount = 11;
+    std::array<VkCopyDescriptorSet, kBindingCount - 1> copies{};
+    for (u32 binding = 1; binding < kBindingCount; binding++)
+    {
+        VkCopyDescriptorSet& copy = copies[binding - 1];
+        copy.sType = VK_STRUCTURE_TYPE_COPY_DESCRIPTOR_SET;
+        copy.srcSet = surfaceState.screenDescriptorSet;
+        copy.srcBinding = binding;
+        copy.dstSet = surfaceState.wideMelonWingsDescriptorSet;
+        copy.dstBinding = binding;
+        copy.descriptorCount = 1;
+    }
+    VkDescriptorImageInfo wingsInfo{};
+    wingsInfo.sampler = (filtering == VulkanFilterMode::Linear || filtering == VulkanFilterMode::Quilez)
+        ? linearSampler
+        : nearestSampler;
+    wingsInfo.imageView = wingsImageView;
+    wingsInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = surfaceState.wideMelonWingsDescriptorSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &wingsInfo;
+    vkUpdateDescriptorSets(device, 1, &write, static_cast<u32>(copies.size()), copies.data());
     return true;
 }
 
@@ -4861,11 +5114,15 @@ bool VulkanSurfacePresenter::updateVertexBuffer(
     const VulkanCompositionInputs& inputs,
     bool directPresent,
     bool retroArchApplied,
+    u32 wideMelonWidth,
+    u32 wideMelonWingsTextureWidth,
     std::vector<DrawCall>& drawCalls)
 {
     if (!surfaceState.vertexBufferDirty
         && surfaceState.cachedDirectPresent == directPresent
         && surfaceState.cachedRetroArchApplied == retroArchApplied
+        && surfaceState.cachedWideMelonWidth == wideMelonWidth
+        && surfaceState.cachedWideMelonWingsTextureWidth == wideMelonWingsTextureWidth
         && surfaceState.cachedFastHighresOnlyTop == inputs.fastHighresOnlyTop
         && surfaceState.cachedFastHighresOnlyBottom == inputs.fastHighresOnlyBottom
         && surfaceState.cachedFastHighresOverlay2DTop == inputs.fastHighresOverlay2DTop
@@ -5032,16 +5289,67 @@ bool VulkanSurfacePresenter::updateVertexBuffer(
         appendQuad(left, right, top, bottom, 1.0f, kDrawModeBackground, surfaceState.backgroundDescriptorSet);
     }
 
-    auto appendScreen = [&](const VulkanPresenterRect& rect, bool topScreen, float alpha) {
-        if (!rect.enabled || rect.width <= 0 || rect.height <= 0)
+    const bool wideFrame = !directPresent && wideMelonWidth > 256u;
+    auto appendScreen = [&](const VulkanPresenterRect& layoutRect, bool topScreen, float alpha, bool nativeOnly) {
+        if (!layoutRect.enabled || layoutRect.width <= 0 || layoutRect.height <= 0)
             return;
+
+        // WideMelon: the main top screen is widened. Without RetroArch it is drawn as the native frame in the middle
+        // and the wings image on both sides; the bottom screen and fixed 4:3 slots (hybrid) stay native. In the wide
+        // RetroArch atlas the top output is wide, so hybrid top slots take its center.
+        const bool widenTop = wideFrame && topScreen && !nativeOnly;
+        const VulkanPresenterRect rect = widenTop
+            ? widenWideMelonTopRect(layoutRect, wideMelonWidth, surfaceWidth) : layoutRect;
+        const bool retroAtlas = retroArchApplied && wideFrame && surfaceState.retroArch.wideMelonAtlas;
+        const float widePad = (static_cast<float>(wideMelonWidth) - 256.0f) / 2.0f / static_cast<float>(wideMelonWidth);
+        if (widenTop && !retroAtlas && surfaceState.wideMelonWingsDescriptorSet != VK_NULL_HANDLE)
+        {
+            const float rectLeft = static_cast<float>(rect.x);
+            const float rectRight = static_cast<float>(rect.x + rect.width);
+            const float centerLeft = rectLeft + static_cast<float>(rect.width) * widePad;
+            const float centerRight = rectRight - static_cast<float>(rect.width) * widePad;
+            const auto xToNdc = [&](float x) { return (x / surfaceWidth) * 2.0f - 1.0f; };
+            const float quadTop = screenYToNdc(rect.y);
+            const float quadBottom = screenYToNdc(rect.y + rect.height);
+            // Keep linear filtering from bleeding across the two strips stored side by side
+            const float stripInset = wideMelonWingsTextureWidth > 0u
+                ? 0.5f / static_cast<float>(wideMelonWingsTextureWidth) : 0.0f;
+            const float viewportWidth = static_cast<float>(rect.width);
+            const float viewportHeight = static_cast<float>(rect.height);
+            appendUvQuad(xToNdc(rectLeft), xToNdc(centerLeft), quadTop, quadBottom,
+                         0.0f, 0.5f - stripInset, 0.0f, 1.0f, alpha, kDrawModeCompositeFrame,
+                         surfaceState.wideMelonWingsDescriptorSet, viewportWidth, viewportHeight);
+            appendUvQuad(xToNdc(centerRight), xToNdc(rectRight), quadTop, quadBottom,
+                         0.5f + stripInset, 1.0f, 0.0f, 1.0f, alpha, kDrawModeCompositeFrame,
+                         surfaceState.wideMelonWingsDescriptorSet, viewportWidth, viewportHeight);
+            appendUvQuad(xToNdc(centerLeft), xToNdc(centerRight), quadTop, quadBottom,
+                         0.0f, 1.0f, 0.0f, 0.5f - (1.0f / 386.0f), alpha, kDrawModeCompositeFrame,
+                         surfaceState.screenDescriptorSet, viewportWidth, viewportHeight);
+            return;
+        }
+        const float nativePad = retroAtlas && topScreen && nativeOnly ? widePad : 0.0f;
+        float uvLeft = nativePad;
+        float uvRight = 1.0f - nativePad;
+        if (retroAtlas)
+        {
+            const float* atlasUv = topScreen ? surfaceState.retroArch.topAtlasUv : surfaceState.retroArch.bottomAtlasUv;
+            const float span = atlasUv[1] - atlasUv[0];
+            uvLeft = atlasUv[0] + nativePad * span;
+            uvRight = atlasUv[1] - nativePad * span;
+        }
 
         const float left = screenXToNdc(rect.x);
         const float right = screenXToNdc(rect.x + rect.width);
         const float top = screenYToNdc(rect.y);
         const float bottom = screenYToNdc(rect.y + rect.height);
-        const float uvTop = directPresent ? 0.0f : (topScreen ? 0.0f : (0.5f + (1.0f / 386.0f)));
-        const float uvBottom = directPresent ? 1.0f : (topScreen ? (0.5f - (1.0f / 386.0f)) : 1.0f);
+        float uvTop = directPresent ? 0.0f : (topScreen ? 0.0f : (0.5f + (1.0f / 386.0f)));
+        float uvBottom = directPresent ? 1.0f : (topScreen ? (0.5f - (1.0f / 386.0f)) : 1.0f);
+        if (retroAtlas)
+        {
+            const float* atlasUv = topScreen ? surfaceState.retroArch.topAtlasUv : surfaceState.retroArch.bottomAtlasUv;
+            uvTop = atlasUv[2];
+            uvBottom = atlasUv[3];
+        }
         const bool canUseDirectHighresOnly =
             directPresent
             && (topScreen ? inputs.fastHighresOnlyTop : inputs.fastHighresOnlyBottom);
@@ -5090,6 +5398,10 @@ bool VulkanSurfacePresenter::updateVertexBuffer(
         {
             drawMode = topScreen ? kDrawModeDirectOverlay2DTop : kDrawModeDirectOverlay2DBottom;
         }
+        else if (wideFrame)
+        {
+            drawMode = retroArchApplied ? kDrawModeRetroArchCompositeFrame : kDrawModeCompositeFrame;
+        }
         else
         {
             drawMode = retroArchApplied
@@ -5102,12 +5414,12 @@ bool VulkanSurfacePresenter::updateVertexBuffer(
         const float bottomVertexUv = directPresent ? uvTop : uvBottom;
 
         const u32 firstVertex = static_cast<u32>(vertices.size());
-        vertices.push_back(SurfaceVertex{left, bottom, 0.0f, bottomVertexUv, alpha});
-        vertices.push_back(SurfaceVertex{left, top, 0.0f, topVertexUv, alpha});
-        vertices.push_back(SurfaceVertex{right, top, 1.0f, topVertexUv, alpha});
-        vertices.push_back(SurfaceVertex{left, bottom, 0.0f, bottomVertexUv, alpha});
-        vertices.push_back(SurfaceVertex{right, top, 1.0f, topVertexUv, alpha});
-        vertices.push_back(SurfaceVertex{right, bottom, 1.0f, bottomVertexUv, alpha});
+        vertices.push_back(SurfaceVertex{left, bottom, uvLeft, bottomVertexUv, alpha});
+        vertices.push_back(SurfaceVertex{left, top, uvLeft, topVertexUv, alpha});
+        vertices.push_back(SurfaceVertex{right, top, uvRight, topVertexUv, alpha});
+        vertices.push_back(SurfaceVertex{left, bottom, uvLeft, bottomVertexUv, alpha});
+        vertices.push_back(SurfaceVertex{right, top, uvRight, topVertexUv, alpha});
+        vertices.push_back(SurfaceVertex{right, bottom, uvRight, bottomVertexUv, alpha});
 
         drawCalls.push_back(DrawCall{
             .descriptorSet = surfaceState.screenDescriptorSet,
@@ -5158,34 +5470,36 @@ bool VulkanSurfacePresenter::updateVertexBuffer(
         VulkanPresenterRect rect;
         bool topScreen = false;
         float alpha = 1.0f;
+        bool nativeOnly = false;
     };
 
     std::vector<PendingScreen> underScreens;
     std::vector<PendingScreen> overScreens;
-    const auto enqueueScreen = [&](const VulkanPresenterRect& rect, bool topScreen, float alpha, bool onTop) {
+    const auto enqueueScreen = [&](const VulkanPresenterRect& rect, bool topScreen, float alpha, bool onTop,
+                                   bool nativeOnly) {
         if (onTop)
-            overScreens.push_back(PendingScreen{rect, topScreen, alpha});
+            overScreens.push_back(PendingScreen{rect, topScreen, alpha, nativeOnly});
         else
-            underScreens.push_back(PendingScreen{rect, topScreen, alpha});
+            underScreens.push_back(PendingScreen{rect, topScreen, alpha, nativeOnly});
     };
 
     if (config.bottomOnTop)
     {
-        enqueueScreen(config.topScreen, true, config.topAlpha, false);
-        enqueueScreen(config.bottomScreen, false, config.bottomAlpha, true);
+        enqueueScreen(config.topScreen, true, config.topAlpha, false, false);
+        enqueueScreen(config.bottomScreen, false, config.bottomAlpha, true, false);
     }
     else
     {
-        enqueueScreen(config.bottomScreen, false, config.bottomAlpha, false);
-        enqueueScreen(config.topScreen, true, config.topAlpha, true);
+        enqueueScreen(config.bottomScreen, false, config.bottomAlpha, false, false);
+        enqueueScreen(config.topScreen, true, config.topAlpha, true, false);
     }
-    enqueueScreen(config.hybridTopScreen, true, config.hybridAlpha, config.hybridOnTop);
-    enqueueScreen(config.hybridBottomScreen, false, config.hybridAlpha, config.hybridOnTop);
+    enqueueScreen(config.hybridTopScreen, true, config.hybridAlpha, config.hybridOnTop, true);
+    enqueueScreen(config.hybridBottomScreen, false, config.hybridAlpha, config.hybridOnTop, true);
 
     for (const PendingScreen& screen : underScreens)
-        appendScreen(screen.rect, screen.topScreen, screen.alpha);
+        appendScreen(screen.rect, screen.topScreen, screen.alpha, screen.nativeOnly);
     for (const PendingScreen& screen : overScreens)
-        appendScreen(screen.rect, screen.topScreen, screen.alpha);
+        appendScreen(screen.rect, screen.topScreen, screen.alpha, screen.nativeOnly);
 
     if (vertices.size() > kMaxSurfaceVertexCount)
         return false;
@@ -5290,6 +5604,8 @@ bool VulkanSurfacePresenter::updateVertexBuffer(
     surfaceState.cachedDrawCalls = drawCalls;
     surfaceState.cachedDirectPresent = directPresent;
     surfaceState.cachedRetroArchApplied = retroArchApplied;
+    surfaceState.cachedWideMelonWidth = wideMelonWidth;
+    surfaceState.cachedWideMelonWingsTextureWidth = wideMelonWingsTextureWidth;
     surfaceState.cachedFastHighresOnlyTop = inputs.fastHighresOnlyTop;
     surfaceState.cachedFastHighresOnlyBottom = inputs.fastHighresOnlyBottom;
     surfaceState.cachedFastHighresOverlay2DTop = inputs.fastHighresOverlay2DTop;
