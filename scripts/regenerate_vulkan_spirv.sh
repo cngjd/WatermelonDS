@@ -448,6 +448,12 @@ generate_header \
   "$ROOT_DIR/app/src/main/cpp/renderer/VulkanRenderer3dNativeProjectionShaderData.h"
 
 generate_header \
+  "$ROOT_DIR/app/src/main/cpp/renderer/VulkanWideMelonWingsShader.comp" \
+  "comp" \
+  "melonDS_android_vulkan_widemelon_wings_comp_spv" \
+  "$ROOT_DIR/app/src/main/cpp/renderer/VulkanWideMelonWingsShaderData.h"
+
+generate_header \
   "$ROOT_DIR/app/src/main/cpp/renderer/VulkanSurfacePresenter.vert" \
   "vert" \
   "melonDS_android_vulkan_surface_presenter_vert_spv" \

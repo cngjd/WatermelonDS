@@ -50,6 +50,7 @@ struct VulkanRenderSettings : public RenderSettings
     bool threadedRendering;
     bool betterPolygons;
     int scale;
+    int viewWidth; // WideMelon 3D view width (256..768, even). 256 = native.
     bool rendererDebugToolsEnabled;
     bool rendererDebugBgObjEnabled;
     bool rendererDebugLatchTraceEnabled;
