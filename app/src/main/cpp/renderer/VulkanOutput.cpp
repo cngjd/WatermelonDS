@@ -25,6 +25,8 @@
 #include "VulkanFaithfulObjScanlineShaderData.h"
 #include "VulkanFaithfulShaderData.h"
 #include "VulkanRenderer3dNativeProjectionShaderData.h"
+#include "VulkanWideMelonWingsShaderData.h"
+#include "WideMelon.h"
 
 namespace MelonDSAndroid
 {
@@ -3657,6 +3659,7 @@ void VulkanOutput::destroyFaithfulDebugLocked()
     }
     if (faithfulPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, faithfulPipeline, nullptr); faithfulPipeline = VK_NULL_HANDLE; }
     if (renderer3dNativeProjectionPipeline != VK_NULL_HANDLE) { vkDestroyPipeline(device, renderer3dNativeProjectionPipeline, nullptr); renderer3dNativeProjectionPipeline = VK_NULL_HANDLE; }
+    destroyWideMelonWingsPipeline();
     if (renderer3dNativeProjectionPipeLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, renderer3dNativeProjectionPipeLayout, nullptr); renderer3dNativeProjectionPipeLayout = VK_NULL_HANDLE; }
     if (renderer3dNativeProjectionSetLayout != VK_NULL_HANDLE) { vkDestroyDescriptorSetLayout(device, renderer3dNativeProjectionSetLayout, nullptr); renderer3dNativeProjectionSetLayout = VK_NULL_HANDLE; }
     if (faithfulPipeLayout != VK_NULL_HANDLE) { vkDestroyPipelineLayout(device, faithfulPipeLayout, nullptr); faithfulPipeLayout = VK_NULL_HANDLE; }
@@ -6760,6 +6763,28 @@ bool VulkanOutput::dispatchFaithfulCompositor(Frame* frame, FrameResource& resou
         materialSealReadbackRecorded = true;
     }
 
+    // WideMelon: widescreen output (wings from the wide 3D of the same render the compositor used when possible)
+    FrameResource* wideMelonSource = nullptr;
+    if (WideMelon::Enabled())
+    {
+        const auto wideUsable = [&](FrameResource* candidate) {
+            return candidate != nullptr
+                && candidate->wideMelon3dValid
+                && candidate->wideMelon3dView != VK_NULL_HANDLE
+                && snapshotVisibleToThisDispatch(*candidate);
+        };
+        for (FrameResource* candidate : {liveCausalSource, &resource,
+                 paseFuenteResource, faithfulNativeFallbackSource})
+        {
+            if (wideUsable(candidate))
+            {
+                wideMelonSource = candidate;
+                break;
+            }
+        }
+    }
+    recordWideMelonWings(resource, wideMelonSource);
+
     if (recordFaithfulPassTiming
         && resource.timestampQueryPool != VK_NULL_HANDLE)
     {
@@ -6874,6 +6899,8 @@ bool VulkanOutput::dispatchFaithfulCompositor(Frame* frame, FrameResource& resou
         markFaithfulLiveSnapshotConsumerLocked(
             *faithfulNativeFallbackSource, resource);
     }
+    if (wideMelonSource != nullptr && wideMelonSource != &resource)
+        markFaithfulLiveSnapshotConsumerLocked(*wideMelonSource, resource);
     faithfulSealReadbackPending[faithfulRing] =
         materialSealReadbackRecorded;
     faithfulSealReadbackSlot[faithfulRing] =
@@ -7490,6 +7517,7 @@ void VulkanOutput::destroyFrameResource(Frame* frame)
 
     releaseRetainedRenderer3dSource(resource);
     destroyRenderer3dSnapshot(resource);
+    destroyWideMelonResources(resource);
     destroyExactObjRenderer3dSnapshot(resource);
     destroyExactTopDisplayedCaptureRenderer3dSnapshot(resource);
 
@@ -8441,6 +8469,7 @@ void VulkanOutput::clearRenderer3dSnapshotPublication(
     resource.renderer3dSnapshotPublicationGeneration = 0u;
     resource.renderer3dSnapshotProjection = {};
     resource.renderer3dNativeProjectionValid = false;
+    resource.wideMelon3dValid = false;
     resource.renderer3dSnapshotScreenSwap = false;
     resource.renderer3dSnapshotZeroPolygons = false;
     resource.renderer3dSnapshotSourceIdentityValid = false;
@@ -10028,6 +10057,7 @@ bool VulkanOutput::recordRenderer3dSnapshotCopy(
     resource.renderer3dSnapshotSourcePolygonCount = selectedIdentity.PolygonCount;
     resource.renderer3dSnapshotSourceCaptureCnt = selectedIdentity.CaptureCnt;
     resource.renderer3dSnapshotSourceScreenSwap = selectedIdentity.ScreenSwap;
+    recordWideMelon3dCopy(resource, renderer3D);
     return true;
 }
 
@@ -10851,6 +10881,399 @@ VkImageView VulkanOutput::getFrameImageView(const Frame* frame) const
         return VK_NULL_HANDLE;
 
     return iterator->second.imageView;
+}
+
+bool VulkanOutput::getFrameWideMelonWings(const Frame* frame, VkImage& image, VkImageView& view, u32& dsWidth,
+                                          u32& textureWidth) const
+{
+    image = VK_NULL_HANDLE;
+    view = VK_NULL_HANDLE;
+    dsWidth = 256u;
+    textureWidth = 0u;
+    if (frame == nullptr)
+        return false;
+
+    auto iterator = resources.find(const_cast<Frame*>(frame));
+    if (iterator == resources.end() || !iterator->second.wideMelonOutValid)
+        return false;
+
+    image = iterator->second.wideMelonOut;
+    view = iterator->second.wideMelonOutView;
+    dsWidth = iterator->second.wideMelonOutDsWidth;
+    textureWidth = iterator->second.wideMelonOutWidth;
+    return true;
+}
+
+bool VulkanOutput::createWideMelonImage(u32 width, u32 height, VkImage& image, VkDeviceMemory& memory,
+                                        VkImageView& view)
+{
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.extent = {width, height, 1u};
+    imageInfo.mipLevels = 1u;
+    imageInfo.arrayLayers = 1u;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                    | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS)
+    {
+        image = VK_NULL_HANDLE;
+        return false;
+    }
+
+    VkMemoryRequirements requirements{};
+    vkGetImageMemoryRequirements(device, image, &requirements);
+    VkMemoryAllocateInfo allocateInfo{};
+    allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocateInfo.allocationSize = requirements.size;
+    allocateInfo.memoryTypeIndex = findMemoryType(requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (allocateInfo.memoryTypeIndex == UINT32_MAX
+        || vkAllocateMemory(device, &allocateInfo, nullptr, &memory) != VK_SUCCESS)
+    {
+        memory = VK_NULL_HANDLE;
+        vkDestroyImage(device, image, nullptr);
+        image = VK_NULL_HANDLE;
+        return false;
+    }
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
+    if (vkBindImageMemory(device, image, memory, 0) != VK_SUCCESS
+        || vkCreateImageView(device, &viewInfo, nullptr, &view) != VK_SUCCESS)
+    {
+        view = VK_NULL_HANDLE;
+        vkDestroyImage(device, image, nullptr);
+        vkFreeMemory(device, memory, nullptr);
+        image = VK_NULL_HANDLE;
+        memory = VK_NULL_HANDLE;
+        return false;
+    }
+    return true;
+}
+
+void VulkanOutput::destroyWideMelonResources(FrameResource& resource)
+{
+    const auto destroyImage = [this](VkImage& image, VkDeviceMemory& memory, VkImageView& view) {
+        if (view != VK_NULL_HANDLE)
+            vkDestroyImageView(device, view, nullptr);
+        if (image != VK_NULL_HANDLE)
+            vkDestroyImage(device, image, nullptr);
+        if (memory != VK_NULL_HANDLE)
+            vkFreeMemory(device, memory, nullptr);
+        view = VK_NULL_HANDLE;
+        image = VK_NULL_HANDLE;
+        memory = VK_NULL_HANDLE;
+    };
+    destroyImage(resource.wideMelon3d, resource.wideMelon3dMemory, resource.wideMelon3dView);
+    destroyImage(resource.wideMelonOut, resource.wideMelonOutMemory, resource.wideMelonOutView);
+    if (resource.wideMelonDescriptorPool != VK_NULL_HANDLE)
+        vkDestroyDescriptorPool(device, resource.wideMelonDescriptorPool, nullptr);
+    resource.wideMelonDescriptorPool = VK_NULL_HANDLE;
+    resource.wideMelonDescriptorSet = VK_NULL_HANDLE;
+    resource.wideMelon3dWidth = resource.wideMelon3dHeight = 0u;
+    resource.wideMelonOutWidth = resource.wideMelonOutHeight = 0u;
+    resource.wideMelon3dLayoutInitialized = false;
+    resource.wideMelon3dValid = false;
+    resource.wideMelonOutValid = false;
+    resource.wideMelonOutDsWidth = 256u;
+}
+
+bool VulkanOutput::ensureWideMelonWingsPipeline()
+{
+    if (wideMelonWingsPipeline != VK_NULL_HANDLE)
+        return true;
+    destroyWideMelonWingsPipeline();
+
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    for (u32 i = 0; i < 2u; i++)
+        bindings[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1u, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    VkDescriptorSetLayoutCreateInfo setInfo{};
+    setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    setInfo.bindingCount = 2u;
+    setInfo.pBindings = bindings;
+    if (vkCreateDescriptorSetLayout(device, &setInfo, nullptr, &wideMelonWingsSetLayout) != VK_SUCCESS)
+    {
+        wideMelonWingsSetLayout = VK_NULL_HANDLE;
+        return false;
+    }
+
+    VkPushConstantRange pushRange{VK_SHADER_STAGE_COMPUTE_BIT, 0u, 2u * sizeof(u32)};
+    VkPipelineLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layoutInfo.setLayoutCount = 1u;
+    layoutInfo.pSetLayouts = &wideMelonWingsSetLayout;
+    layoutInfo.pushConstantRangeCount = 1u;
+    layoutInfo.pPushConstantRanges = &pushRange;
+    if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &wideMelonWingsPipeLayout) != VK_SUCCESS)
+    {
+        wideMelonWingsPipeLayout = VK_NULL_HANDLE;
+        destroyWideMelonWingsPipeline();
+        return false;
+    }
+
+    VkShaderModuleCreateInfo moduleInfo{};
+    moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    moduleInfo.codeSize = melonDS_android_vulkan_widemelon_wings_comp_spv_len;
+    moduleInfo.pCode = reinterpret_cast<const uint32_t*>(melonDS_android_vulkan_widemelon_wings_comp_spv);
+    VkShaderModule module = VK_NULL_HANDLE;
+    if (vkCreateShaderModule(device, &moduleInfo, nullptr, &module) != VK_SUCCESS)
+    {
+        destroyWideMelonWingsPipeline();
+        return false;
+    }
+    VkComputePipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelineInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    pipelineInfo.stage.module = module;
+    pipelineInfo.stage.pName = "main";
+    pipelineInfo.layout = wideMelonWingsPipeLayout;
+    const VkResult result = vkCreateComputePipelines(
+        device, faithfulPipelineCache, 1u, &pipelineInfo, nullptr, &wideMelonWingsPipeline);
+    vkDestroyShaderModule(device, module, nullptr);
+    if (result != VK_SUCCESS)
+    {
+        wideMelonWingsPipeline = VK_NULL_HANDLE;
+        destroyWideMelonWingsPipeline();
+        melonDS::Platform::Log(melonDS::Platform::LogLevel::Error,
+            "VulkanOutput: WideMelon wings pipeline creation failed (%d)", static_cast<int>(result));
+        return false;
+    }
+    return true;
+}
+
+void VulkanOutput::destroyWideMelonWingsPipeline()
+{
+    if (wideMelonWingsPipeline != VK_NULL_HANDLE)
+        vkDestroyPipeline(device, wideMelonWingsPipeline, nullptr);
+    if (wideMelonWingsPipeLayout != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device, wideMelonWingsPipeLayout, nullptr);
+    if (wideMelonWingsSetLayout != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(device, wideMelonWingsSetLayout, nullptr);
+    wideMelonWingsPipeline = VK_NULL_HANDLE;
+    wideMelonWingsPipeLayout = VK_NULL_HANDLE;
+    wideMelonWingsSetLayout = VK_NULL_HANDLE;
+}
+
+void VulkanOutput::recordWideMelon3dCopy(FrameResource& resource, const melonDS::VulkanRenderer3D& renderer3D)
+{
+    resource.wideMelon3dValid = false;
+    if (!WideMelon::Enabled() || vkCmdBlitImage == nullptr)
+        return;
+
+    const u32 dsWidth = static_cast<u32>(WideMelon::Width());
+    const VkImage source = renderer3D.GetWideColorTargetImage();
+    const u32 sourceWidth = renderer3D.GetWideColorTargetWidth();
+    const u32 sourceHeight = renderer3D.GetWideColorTargetHeight();
+    const u32 scale3d = sourceWidth / dsWidth;
+    const u32 outScale = std::max<u32>(1u, resource.width / 256u);
+    if (source == VK_NULL_HANDLE || scale3d == 0u || sourceHeight < 192u * scale3d)
+        return;
+
+    // Only the wing strips (left then right), stored at the output scale so the wings pass reads them 1:1
+    const u32 pad = (dsWidth - 256u) / 2u;
+    const u32 width = 2u * pad * outScale;
+    const u32 height = 192u * outScale;
+    if (resource.wideMelon3d == VK_NULL_HANDLE
+        || resource.wideMelon3dWidth != width || resource.wideMelon3dHeight != height)
+    {
+        if (!waitFaithfulLiveSnapshotUseLocked(resource))
+            return;
+        if (resource.wideMelon3dView != VK_NULL_HANDLE)
+            vkDestroyImageView(device, resource.wideMelon3dView, nullptr);
+        if (resource.wideMelon3d != VK_NULL_HANDLE)
+            vkDestroyImage(device, resource.wideMelon3d, nullptr);
+        if (resource.wideMelon3dMemory != VK_NULL_HANDLE)
+            vkFreeMemory(device, resource.wideMelon3dMemory, nullptr);
+        resource.wideMelon3dView = VK_NULL_HANDLE;
+        resource.wideMelon3d = VK_NULL_HANDLE;
+        resource.wideMelon3dMemory = VK_NULL_HANDLE;
+        resource.wideMelon3dLayoutInitialized = false;
+        resource.wideMelon3dWidth = resource.wideMelon3dHeight = 0u;
+        if (!createWideMelonImage(width, height, resource.wideMelon3d, resource.wideMelon3dMemory,
+                                  resource.wideMelon3dView))
+            return;
+        resource.wideMelon3dWidth = width;
+        resource.wideMelon3dHeight = height;
+    }
+
+    VkImageMemoryBarrier toBlit[2]{};
+    for (VkImageMemoryBarrier& barrier : toBlit)
+    {
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
+        barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    toBlit[0].image = source;
+    toBlit[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT
+                            | VK_ACCESS_TRANSFER_WRITE_BIT;
+    toBlit[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    toBlit[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toBlit[1].image = resource.wideMelon3d;
+    toBlit[1].srcAccessMask = resource.wideMelon3dLayoutInitialized ? VK_ACCESS_SHADER_READ_BIT : 0u;
+    toBlit[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toBlit[1].oldLayout = resource.wideMelon3dLayoutInitialized
+        ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    vkCmdPipelineBarrier(resource.commandBuffer,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0u, 0u, nullptr, 0u, nullptr, 2u, toBlit);
+
+    VkImageBlit blits[2]{};
+    for (u32 side = 0; side < 2u; side++)
+    {
+        const u32 srcX = side == 0u ? 0u : (pad + 256u) * scale3d;
+        const u32 dstX = side * pad * outScale;
+        blits[side].srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u};
+        blits[side].srcOffsets[0] = {static_cast<int32_t>(srcX), 0, 0};
+        blits[side].srcOffsets[1] = {static_cast<int32_t>(srcX + pad * scale3d), static_cast<int32_t>(192u * scale3d), 1};
+        blits[side].dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u};
+        blits[side].dstOffsets[0] = {static_cast<int32_t>(dstX), 0, 0};
+        blits[side].dstOffsets[1] = {static_cast<int32_t>(dstX + pad * outScale), static_cast<int32_t>(height), 1};
+    }
+    vkCmdBlitImage(resource.commandBuffer,
+        source, VK_IMAGE_LAYOUT_GENERAL,
+        resource.wideMelon3d, VK_IMAGE_LAYOUT_GENERAL,
+        2u, blits,
+        (scale3d > outScale && ssaaTecho()) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+
+    VkImageMemoryBarrier afterBlit[2] = {toBlit[0], toBlit[1]};
+    afterBlit[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    afterBlit[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT
+                               | VK_ACCESS_SHADER_WRITE_BIT;
+    afterBlit[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    afterBlit[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    afterBlit[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    vkCmdPipelineBarrier(resource.commandBuffer,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        0u, 0u, nullptr, 0u, nullptr, 2u, afterBlit);
+
+    resource.wideMelon3dLayoutInitialized = true;
+    resource.wideMelon3dValid = true;
+}
+
+void VulkanOutput::recordWideMelonWings(FrameResource& resource, FrameResource* source3d)
+{
+    resource.wideMelonOutValid = false;
+    resource.wideMelonOutDsWidth = 256u;
+    if (!WideMelon::Enabled() || !ensureWideMelonWingsPipeline())
+        return;
+
+    const u32 dsWidth = static_cast<u32>(WideMelon::Width());
+    const u32 scale = resource.width / 256u;
+    const u32 width = (dsWidth - 256u) * scale; // both strips
+    const u32 height = 192u * scale;            // top screen only
+    if (scale == 0u)
+        return;
+
+    if (resource.wideMelonOut == VK_NULL_HANDLE
+        || resource.wideMelonOutWidth != width || resource.wideMelonOutHeight != height)
+    {
+        if (resource.wideMelonOutView != VK_NULL_HANDLE)
+            vkDestroyImageView(device, resource.wideMelonOutView, nullptr);
+        if (resource.wideMelonOut != VK_NULL_HANDLE)
+            vkDestroyImage(device, resource.wideMelonOut, nullptr);
+        if (resource.wideMelonOutMemory != VK_NULL_HANDLE)
+            vkFreeMemory(device, resource.wideMelonOutMemory, nullptr);
+        resource.wideMelonOutView = VK_NULL_HANDLE;
+        resource.wideMelonOut = VK_NULL_HANDLE;
+        resource.wideMelonOutMemory = VK_NULL_HANDLE;
+        resource.wideMelonOutWidth = resource.wideMelonOutHeight = 0u;
+        if (!createWideMelonImage(width, height, resource.wideMelonOut, resource.wideMelonOutMemory,
+                                  resource.wideMelonOutView))
+            return;
+        resource.wideMelonOutWidth = width;
+        resource.wideMelonOutHeight = height;
+    }
+
+    if (resource.wideMelonDescriptorSet == VK_NULL_HANDLE)
+    {
+        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2u};
+        VkDescriptorPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.maxSets = 1u;
+        poolInfo.poolSizeCount = 1u;
+        poolInfo.pPoolSizes = &poolSize;
+        if (resource.wideMelonDescriptorPool == VK_NULL_HANDLE
+            && vkCreateDescriptorPool(device, &poolInfo, nullptr, &resource.wideMelonDescriptorPool) != VK_SUCCESS)
+        {
+            resource.wideMelonDescriptorPool = VK_NULL_HANDLE;
+            return;
+        }
+        VkDescriptorSetAllocateInfo allocateInfo{};
+        allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocateInfo.descriptorPool = resource.wideMelonDescriptorPool;
+        allocateInfo.descriptorSetCount = 1u;
+        allocateInfo.pSetLayouts = &wideMelonWingsSetLayout;
+        if (vkAllocateDescriptorSets(device, &allocateInfo, &resource.wideMelonDescriptorSet) != VK_SUCCESS)
+        {
+            resource.wideMelonDescriptorSet = VK_NULL_HANDLE;
+            return;
+        }
+    }
+
+    const bool has3d = source3d != nullptr
+        && source3d->wideMelon3dWidth == width
+        && source3d->wideMelon3dHeight == height;
+    // Without 3D the shader only writes black and never reads binding 0
+    VkDescriptorImageInfo images[2] = {
+        {VK_NULL_HANDLE, has3d ? source3d->wideMelon3dView : resource.wideMelonOutView, VK_IMAGE_LAYOUT_GENERAL},
+        {VK_NULL_HANDLE, resource.wideMelonOutView, VK_IMAGE_LAYOUT_GENERAL},
+    };
+    VkWriteDescriptorSet writes[2]{};
+    for (u32 i = 0; i < 2u; i++)
+    {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = resource.wideMelonDescriptorSet;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1u;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[i].pImageInfo = &images[i];
+    }
+    vkUpdateDescriptorSets(device, 2u, writes, 0u, nullptr);
+
+    VkImageMemoryBarrier toWings{};
+    toWings.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toWings.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toWings.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toWings.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
+    toWings.image = resource.wideMelonOut;
+    toWings.srcAccessMask = 0u;
+    toWings.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toWings.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // fully overwritten
+    toWings.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    vkCmdPipelineBarrier(resource.commandBuffer,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        0u, 0u, nullptr, 0u, nullptr, 1u, &toWings);
+
+    vkCmdBindPipeline(resource.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, wideMelonWingsPipeline);
+    vkCmdBindDescriptorSets(resource.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, wideMelonWingsPipeLayout,
+                            0u, 1u, &resource.wideMelonDescriptorSet, 0u, nullptr);
+    const u32 push[2] = {WideMelon::FrameInfo(), has3d ? 1u : 0u};
+    vkCmdPushConstants(resource.commandBuffer, wideMelonWingsPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT,
+                       0u, sizeof(push), push);
+    vkCmdDispatch(resource.commandBuffer, (width + 15u) / 16u, (height + 15u) / 16u, 1u);
+
+    VkImageMemoryBarrier afterWings = toWings;
+    afterWings.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    afterWings.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+    afterWings.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    vkCmdPipelineBarrier(resource.commandBuffer,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        0u, 0u, nullptr, 0u, nullptr, 1u, &afterWings);
+
+    resource.wideMelonOutValid = true;
+    resource.wideMelonOutDsWidth = dsWidth;
 }
 
 }

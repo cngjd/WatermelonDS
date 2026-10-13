@@ -170,6 +170,7 @@ val vulkanShaderSources = listOf(
     rootProject.file("melonDS-android-lib/src/GPU3D_Vulkan_GraphicsEdgeFogShader.frag"),
     rootProject.file("melonDS-android-lib/src/GPU3D_Vulkan_GraphicsFogShader.frag"),
     rootProject.file("app/src/main/cpp/renderer/VulkanCompositorShader.comp"),
+    rootProject.file("app/src/main/cpp/renderer/VulkanWideMelonWingsShader.comp"),
     rootProject.file("app/src/main/cpp/renderer/VulkanSurfacePresenter.vert"),
     rootProject.file("app/src/main/cpp/renderer/VulkanSurfacePresenter.frag"),
 )

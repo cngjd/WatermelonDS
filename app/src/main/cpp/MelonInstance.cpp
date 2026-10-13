@@ -7325,17 +7325,19 @@ void MelonInstance::updateRenderer()
     const bool fastForwardActive = isFastForwardActive();
 
     // WideMelon projects geometry in the shared GPU3D core, so the width must be native (256) for every renderer that
-    // doesn't support it (Software, Vulkan). Only OpenGL and Compute get the configured width.
+    // doesn't support it (Software). OpenGL, Compute and Vulkan get the configured width.
     int desiredViewWidth = 256;
     if (newRenderer == Renderer::OpenGl)
         desiredViewWidth = static_cast<OpenGlRenderSettings&>(*currentConfiguration->renderSettings).viewWidth;
     else if (newRenderer == Renderer::Compute)
         desiredViewWidth = static_cast<ComputeRenderSettings&>(*currentConfiguration->renderSettings).viewWidth;
+    else if (newRenderer == Renderer::Vulkan)
+        desiredViewWidth = static_cast<VulkanRenderSettings&>(*currentConfiguration->renderSettings).viewWidth;
     const int previousViewWidth = WideMelon::Width();
     WideMelon::SetWidth(desiredViewWidth);
-    // Recreate GL/Compute renderers when the width changes so framebuffers and geometry agree
+    // Recreate the renderer when the width changes so framebuffers and geometry agree
     const bool widescreenChanged = WideMelon::Width() != previousViewWidth
-        && (newRenderer == Renderer::OpenGl || newRenderer == Renderer::Compute);
+        && (newRenderer == Renderer::OpenGl || newRenderer == Renderer::Compute || newRenderer == Renderer::Vulkan);
     const bool transitionTouchesVulkan =
         currentRenderer == Renderer::Vulkan || newRenderer == Renderer::Vulkan;
     std::unique_lock<std::mutex> frameTailTransitionBarrier;

@@ -457,6 +457,7 @@ std::unique_ptr<MelonDSAndroid::RenderSettings> MelonDSAndroidConfiguration::bui
                 .threadedRendering = true,
                 .betterPolygons = vulkanBetterPolygons,
                 .scale = internalResolutionScaling,
+                .viewWidth = widescreenViewWidth,
                 .rendererDebugToolsEnabled = rendererDebugToolsEnabled != 0,
                 .rendererDebugBgObjEnabled = rendererDebugBgObjEnabled != 0,
                 .rendererDebugLatchTraceEnabled = rendererDebugLatchTraceEnabled != 0,
