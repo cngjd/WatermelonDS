@@ -28,6 +28,25 @@ inline int Width()
     return WidthStorage();
 }
 
+// Per-frame info for renderers that composite the widescreen wings per frame (Vulkan), latched by the 2D renderer on
+// engine A's line 96: bit 0 real 3D scene, bit 1 engine A on the top screen, bits 2-3 BG0 BLDCNT brightness effect,
+// bits 4-8 EVY, bits 16-31 master brightness register.
+inline uint32_t& FrameInfoStorage()
+{
+    static uint32_t info = 0;
+    return info;
+}
+
+inline void SetFrameInfo(uint32_t info)
+{
+    FrameInfoStorage() = info;
+}
+
+inline uint32_t FrameInfo()
+{
+    return FrameInfoStorage();
+}
+
 inline bool Enabled()
 {
     return Width() > 256;
