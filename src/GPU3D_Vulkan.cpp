@@ -17,6 +17,7 @@
 */
 
 #include "GPU3D_Vulkan.h"
+#include "WideMelon.h"
 #include <atomic>
 #include <cstdlib>
 #ifdef __ANDROID__
@@ -1980,6 +1981,26 @@ u32 VulkanRenderer3D::GetColorTargetHeight() const noexcept
     if (const FaithfulRasterProductSlot* target = getPublishedFaithfulRasterProductSlot())
         return target->Height;
     return ColorImageHeight;
+}
+
+VkImage VulkanRenderer3D::GetWideColorTargetImage() const noexcept
+{
+    const FaithfulRasterProductSlot* target = getPublishedFaithfulRasterProductSlot();
+    if (target == nullptr || !WideMelon::Enabled() || !target->Wide.Initialized)
+        return VK_NULL_HANDLE;
+    return target->Wide.ColorImage;
+}
+
+u32 VulkanRenderer3D::GetWideColorTargetWidth() const noexcept
+{
+    const FaithfulRasterProductSlot* target = getPublishedFaithfulRasterProductSlot();
+    return target != nullptr ? target->Wide.Width : 0u;
+}
+
+u32 VulkanRenderer3D::GetWideColorTargetHeight() const noexcept
+{
+    const FaithfulRasterProductSlot* target = getPublishedFaithfulRasterProductSlot();
+    return target != nullptr ? target->Wide.Height : 0u;
 }
 
 u64 VulkanRenderer3D::RetainPublishedColorTargetForPresentation() noexcept
@@ -6908,7 +6929,7 @@ void VulkanRenderer3D::destroyRenderTarget()
     ColorImageInitialized = false;
 }
 
-bool VulkanRenderer3D::ensureFaithfulRasterProductSlot(FaithfulRasterProductSlot& target, u32 width, u32 height)
+bool VulkanRenderer3D::ensureRasterAttachmentSet(RasterAttachmentSet& target, u32 width, u32 height)
 {
     if (!GraphicsReady)
         return false;
@@ -6931,7 +6952,7 @@ bool VulkanRenderer3D::ensureFaithfulRasterProductSlot(FaithfulRasterProductSlot
         return true;
     }
 
-    destroyFaithfulRasterProductSlot(target);
+    destroyRasterAttachmentSet(target);
 
     const auto createImage = [&](VkFormat format,
                                  VkImageUsageFlags usage,
@@ -7013,7 +7034,7 @@ bool VulkanRenderer3D::ensureFaithfulRasterProductSlot(FaithfulRasterProductSlot
             target.ColorImageMemory,
             target.ColorImageView))
     {
-        destroyFaithfulRasterProductSlot(target);
+        destroyRasterAttachmentSet(target);
         return false;
     }
 
@@ -7025,7 +7046,7 @@ bool VulkanRenderer3D::ensureFaithfulRasterProductSlot(FaithfulRasterProductSlot
             target.AttrImageMemory,
             target.AttrImageView))
     {
-        destroyFaithfulRasterProductSlot(target);
+        destroyRasterAttachmentSet(target);
         return false;
     }
 
@@ -7037,7 +7058,7 @@ bool VulkanRenderer3D::ensureFaithfulRasterProductSlot(FaithfulRasterProductSlot
             target.DepthStencilImageMemory,
             target.DepthStencilImageView))
     {
-        destroyFaithfulRasterProductSlot(target);
+        destroyRasterAttachmentSet(target);
         return false;
     }
     if (!createImageView(
@@ -7046,7 +7067,7 @@ bool VulkanRenderer3D::ensureFaithfulRasterProductSlot(FaithfulRasterProductSlot
             VK_IMAGE_ASPECT_DEPTH_BIT,
             target.DepthStencilDepthImageView))
     {
-        destroyFaithfulRasterProductSlot(target);
+        destroyRasterAttachmentSet(target);
         return false;
     }
 
@@ -7065,13 +7086,13 @@ bool VulkanRenderer3D::ensureFaithfulRasterProductSlot(FaithfulRasterProductSlot
     rasterFramebufferCreateInfo.layers = 1;
     if (vkCreateFramebuffer(Device, &rasterFramebufferCreateInfo, nullptr, &target.RasterFramebuffer) != VK_SUCCESS)
     {
-        destroyFaithfulRasterProductSlot(target);
+        destroyRasterAttachmentSet(target);
         return false;
     }
     rasterFramebufferCreateInfo.renderPass = GraphicsRasterLoadRenderPass;
     if (vkCreateFramebuffer(Device, &rasterFramebufferCreateInfo, nullptr, &target.RasterLoadFramebuffer) != VK_SUCCESS)
     {
-        destroyFaithfulRasterProductSlot(target);
+        destroyRasterAttachmentSet(target);
         return false;
     }
 
@@ -7085,7 +7106,7 @@ bool VulkanRenderer3D::ensureFaithfulRasterProductSlot(FaithfulRasterProductSlot
     colorOnlyFramebufferCreateInfo.layers = 1;
     if (vkCreateFramebuffer(Device, &colorOnlyFramebufferCreateInfo, nullptr, &target.ColorOnlyFramebuffer) != VK_SUCCESS)
     {
-        destroyFaithfulRasterProductSlot(target);
+        destroyRasterAttachmentSet(target);
         return false;
     }
 
@@ -7099,7 +7120,7 @@ bool VulkanRenderer3D::ensureFaithfulRasterProductSlot(FaithfulRasterProductSlot
     finalFramebufferCreateInfo.layers = 1;
     if (vkCreateFramebuffer(Device, &finalFramebufferCreateInfo, nullptr, &target.FinalFramebuffer) != VK_SUCCESS)
     {
-        destroyFaithfulRasterProductSlot(target);
+        destroyRasterAttachmentSet(target);
         return false;
     }
 
@@ -7109,11 +7130,36 @@ bool VulkanRenderer3D::ensureFaithfulRasterProductSlot(FaithfulRasterProductSlot
     return true;
 }
 
-void VulkanRenderer3D::destroyFaithfulRasterProductSlot(FaithfulRasterProductSlot& target)
+bool VulkanRenderer3D::ensureFaithfulRasterProductSlot(FaithfulRasterProductSlot& target, u32 width, u32 height)
+{
+    if (!ensureRasterAttachmentSet(target, width, height))
+    {
+        destroyRasterAttachmentSet(target.Wide);
+        return false;
+    }
+
+    // WideMelon: rasterize into wider attachments, the slot's own color image receives the native-width center
+    if (WideMelon::Enabled() && width >= 256u && (width % 256u) == 0u)
+    {
+        const u32 wideWidth = (width / 256u) * static_cast<u32>(WideMelon::Width());
+        if (!ensureRasterAttachmentSet(target.Wide, wideWidth, height))
+        {
+            destroyFaithfulRasterProductSlot(target);
+            return false;
+        }
+    }
+    else
+    {
+        destroyRasterAttachmentSet(target.Wide);
+    }
+    return true;
+}
+
+void VulkanRenderer3D::destroyRasterAttachmentSet(RasterAttachmentSet& target)
 {
     if (Device == VK_NULL_HANDLE)
     {
-        target = FaithfulRasterProductSlot{};
+        target = RasterAttachmentSet{};
         return;
     }
 
@@ -7152,7 +7198,13 @@ void VulkanRenderer3D::destroyFaithfulRasterProductSlot(FaithfulRasterProductSlo
     if (target.RasterColorImageMemory != VK_NULL_HANDLE)
         vkFreeMemory(Device, target.RasterColorImageMemory, nullptr);
 
-    target = FaithfulRasterProductSlot{};
+    target = RasterAttachmentSet{};
+}
+
+void VulkanRenderer3D::destroyFaithfulRasterProductSlot(FaithfulRasterProductSlot& target)
+{
+    destroyRasterAttachmentSet(target.Wide);
+    destroyRasterAttachmentSet(target);
 }
 
 bool VulkanRenderer3D::ensureTriangleBuffer(RenderContext* context, size_t triangleCount)
@@ -8808,6 +8860,40 @@ bool VulkanRenderer3D::dispatchPlainRearPlaneOnly(
         1,
         &toGeneral);
 
+    // WideMelon: the widescreen wings come from the wide raster image, give it the same rear plane
+    if (graphicsTarget != nullptr
+        && WideMelon::Enabled()
+        && graphicsTarget->Wide.ColorImage != VK_NULL_HANDLE)
+    {
+        VkImageMemoryBarrier wideToTransfer = toTransferDestination;
+        wideToTransfer.image = graphicsTarget->Wide.ColorImage;
+        wideToTransfer.oldLayout = graphicsTarget->Wide.Initialized
+            ? VK_IMAGE_LAYOUT_GENERAL
+            : VK_IMAGE_LAYOUT_UNDEFINED;
+        vkCmdPipelineBarrier(
+            commandBuffer,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr,
+            1, &wideToTransfer);
+        vkCmdClearColorImage(
+            commandBuffer,
+            graphicsTarget->Wide.ColorImage,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            &clearValue,
+            1,
+            &colorRange);
+        VkImageMemoryBarrier wideToGeneral = toGeneral;
+        wideToGeneral.image = graphicsTarget->Wide.ColorImage;
+        vkCmdPipelineBarrier(
+            commandBuffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            0, 0, nullptr, 0, nullptr,
+            1, &wideToGeneral);
+        graphicsTarget->Wide.Initialized = true;
+    }
+
     if (recordTimestamps)
     {
         for (u32 query = 4u; query < TimestampQueryCount; query++)
@@ -8986,32 +9072,41 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
     }
 
     FaithfulRasterProductSlot* graphicsTarget = getContextFaithfulRasterProductSlot(context);
-    VkImage ColorImage = graphicsTarget != nullptr ? graphicsTarget->ColorImage : this->ColorImage;
-    VkImageView ColorImageView = graphicsTarget != nullptr ? graphicsTarget->ColorImageView : this->ColorImageView;
+    // WideMelon: rasterize into the slot's wide attachments; the native-width center is copied into the slot's own
+    // color image after the final pass (see below), so everything reading the slot keeps seeing a 4:3 product.
+    const bool wideRaster = graphicsTarget != nullptr
+        && WideMelon::Enabled()
+        && graphicsTarget->Wide.ColorImage != VK_NULL_HANDLE
+        && graphicsTarget->Wide.FinalFramebuffer != VK_NULL_HANDLE;
+    RasterAttachmentSet* rasterSet = wideRaster
+        ? &graphicsTarget->Wide
+        : static_cast<RasterAttachmentSet*>(graphicsTarget);
+    VkImage ColorImage = rasterSet != nullptr ? rasterSet->ColorImage : this->ColorImage;
+    VkImageView ColorImageView = rasterSet != nullptr ? rasterSet->ColorImageView : this->ColorImageView;
     VkImage RasterColorImage = ColorImage;
     VkImageView RasterColorImageView = ColorImageView;
-    VkImage AttrImage = graphicsTarget != nullptr ? graphicsTarget->AttrImage : this->AttrImage;
-    VkImageView AttrImageView = graphicsTarget != nullptr ? graphicsTarget->AttrImageView : this->AttrImageView;
-    VkImage DepthStencilImage = graphicsTarget != nullptr ? graphicsTarget->DepthStencilImage : this->DepthStencilImage;
-    VkImageView DepthStencilImageView = graphicsTarget != nullptr ? graphicsTarget->DepthStencilImageView : this->DepthStencilImageView;
-    VkImageView DepthStencilDepthImageView = graphicsTarget != nullptr ? graphicsTarget->DepthStencilDepthImageView : this->DepthStencilDepthImageView;
+    VkImage AttrImage = rasterSet != nullptr ? rasterSet->AttrImage : this->AttrImage;
+    VkImageView AttrImageView = rasterSet != nullptr ? rasterSet->AttrImageView : this->AttrImageView;
+    VkImage DepthStencilImage = rasterSet != nullptr ? rasterSet->DepthStencilImage : this->DepthStencilImage;
+    VkImageView DepthStencilImageView = rasterSet != nullptr ? rasterSet->DepthStencilImageView : this->DepthStencilImageView;
+    VkImageView DepthStencilDepthImageView = rasterSet != nullptr ? rasterSet->DepthStencilDepthImageView : this->DepthStencilDepthImageView;
     const bool usesGraphicsProductResources = true;
     const GraphicsRasterDispatchPolicy& rasterDispatchPolicy =
         kGraphicsRasterDispatchPolicy;
     VkImage logicalDepthImage = DepthStencilImage;
     VkImageView logicalDepthImageView = DepthStencilDepthImageView;
-    VkFramebuffer GraphicsRasterFramebuffer = graphicsTarget != nullptr ? graphicsTarget->RasterFramebuffer : this->GraphicsRasterFramebuffer;
-    VkFramebuffer GraphicsRasterLoadFramebuffer = graphicsTarget != nullptr ? graphicsTarget->RasterLoadFramebuffer : this->GraphicsRasterLoadFramebuffer;
-    VkFramebuffer GraphicsColorOnlyFramebuffer = graphicsTarget != nullptr ? graphicsTarget->ColorOnlyFramebuffer : this->GraphicsColorOnlyFramebuffer;
-    VkFramebuffer GraphicsFinalFramebuffer = graphicsTarget != nullptr ? graphicsTarget->FinalFramebuffer : this->GraphicsFinalFramebuffer;
-    const u32 ColorImageWidth = graphicsTarget != nullptr ? graphicsTarget->Width : this->ColorImageWidth;
-    const u32 ColorImageHeight = graphicsTarget != nullptr ? graphicsTarget->Height : this->ColorImageHeight;
-    bool& ColorImageInitialized = graphicsTarget != nullptr ? graphicsTarget->Initialized : this->ColorImageInitialized;
+    VkFramebuffer GraphicsRasterFramebuffer = rasterSet != nullptr ? rasterSet->RasterFramebuffer : this->GraphicsRasterFramebuffer;
+    VkFramebuffer GraphicsRasterLoadFramebuffer = rasterSet != nullptr ? rasterSet->RasterLoadFramebuffer : this->GraphicsRasterLoadFramebuffer;
+    VkFramebuffer GraphicsColorOnlyFramebuffer = rasterSet != nullptr ? rasterSet->ColorOnlyFramebuffer : this->GraphicsColorOnlyFramebuffer;
+    VkFramebuffer GraphicsFinalFramebuffer = rasterSet != nullptr ? rasterSet->FinalFramebuffer : this->GraphicsFinalFramebuffer;
+    const u32 ColorImageWidth = rasterSet != nullptr ? rasterSet->Width : this->ColorImageWidth;
+    const u32 ColorImageHeight = rasterSet != nullptr ? rasterSet->Height : this->ColorImageHeight;
+    bool& ColorImageInitialized = rasterSet != nullptr ? rasterSet->Initialized : this->ColorImageInitialized;
     const u32 effectiveRasterScale =
         static_cast<u32>(std::max(1, EscalaEfectiva));
 
     u32 renderWidth = std::min<u32>(ColorImageWidth,
-        256u * effectiveRasterScale);
+        (wideRaster ? static_cast<u32>(WideMelon::Width()) : 256u) * effectiveRasterScale);
     u32 renderHeight = std::min<u32>(ColorImageHeight,
         192u * effectiveRasterScale);
 
@@ -12570,6 +12665,70 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
     }
     FinalCpuWindow.Add(PerfNowNs() - finalCpuStartNs);
 
+    if (wideRaster)
+    {
+        // WideMelon: publish the native-width center of the wide frame as the slot's 4:3 product. The wide image stays
+        // in GENERAL layout for the widescreen wings pass.
+        const u32 nativeWidth = 256u * effectiveRasterScale;
+        const u32 padX = static_cast<u32>(WideMelon::SidePad()) * effectiveRasterScale;
+        const u32 copyHeight = std::min<u32>(renderHeight, graphicsTarget->Height);
+
+        std::array<VkImageMemoryBarrier, 2> toCopy{};
+        for (VkImageMemoryBarrier& barrier : toCopy)
+        {
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        }
+        toCopy[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        toCopy[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        toCopy[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        toCopy[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        toCopy[0].image = ColorImage;
+        toCopy[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        toCopy[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toCopy[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // fully overwritten below
+        toCopy[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        toCopy[1].image = graphicsTarget->ColorImage;
+        vkCmdPipelineBarrier(
+            commandBuffer,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr,
+            static_cast<u32>(toCopy.size()), toCopy.data());
+
+        VkImageCopy centerCopy{};
+        centerCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        centerCopy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        centerCopy.srcOffset = {static_cast<int32_t>(padX), 0, 0};
+        centerCopy.dstOffset = {0, 0, 0};
+        centerCopy.extent = {std::min<u32>(nativeWidth, graphicsTarget->Width), copyHeight, 1u};
+        vkCmdCopyImage(
+            commandBuffer,
+            ColorImage, VK_IMAGE_LAYOUT_GENERAL,
+            graphicsTarget->ColorImage, VK_IMAGE_LAYOUT_GENERAL,
+            1, &centerCopy);
+
+        std::array<VkImageMemoryBarrier, 2> afterCopy = toCopy;
+        afterCopy[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        afterCopy[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        afterCopy[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        afterCopy[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+        afterCopy[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        vkCmdPipelineBarrier(
+            commandBuffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            0, 0, nullptr, 0, nullptr,
+            static_cast<u32>(afterCopy.size()), afterCopy.data());
+
+        // From here on (capture export, publication) the frame is the slot's native product
+        graphicsTarget->Initialized = true;
+        ColorImage = graphicsTarget->ColorImage;
+        ColorImageView = graphicsTarget->ColorImageView;
+    }
+
     if ((timestampQueryPool != VK_NULL_HANDLE) && timestampPending)
         vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, timestampQueryPool, 7);
 
@@ -13493,7 +13652,9 @@ void VulkanRenderer3D::buildGraphicsTriangleList(GPU& gpu)
     const u32 scaleFactor = static_cast<u32>(std::max(1, EscalaEfectiva));
     const u32 targetHeight = 192u * scaleFactor;
     const float scale = static_cast<float>(scaleFactor);
-    const float maxTargetX = 256.0f * scale;
+    // WideMelon: geometry is mapped into the wide raster target (see MapAcceleratedFixedXToWide)
+    const u32 rasterNativeWidth = WideMelon::Enabled() ? static_cast<u32>(WideMelon::Width()) : 256u;
+    const float maxTargetX = static_cast<float>(rasterNativeWidth) * scale;
     const float maxTargetY = 192.0f * scale;
     const bool textureMapsEnabled = (gpu.GPU3D.RenderDispCnt & (1u << 0u)) != 0u;
     const bool highlightEnabled = (gpu.GPU3D.RenderDispCnt & (1u << 1u)) != 0u;
@@ -13505,7 +13666,7 @@ void VulkanRenderer3D::buildGraphicsTriangleList(GPU& gpu)
     sceneBuildConfig.Scale = std::max(1, EscalaEfectiva);
     sceneBuildConfig.BetterPolygons = BetterPolygons;
     sceneBuildConfig.UseHiresCoordinates = true;
-    sceneBuildConfig.MaxFixedX = static_cast<s32>((256u * scaleFactor * 16u) - 1u);
+    sceneBuildConfig.MaxFixedX = static_cast<s32>((rasterNativeWidth * scaleFactor * 16u) - 1u);
     sceneBuildConfig.MaxFixedY = static_cast<s32>((192u * scaleFactor * 16u) - 1u);
     sceneBuildConfig.CoverageFix.Enabled = CoverageFixEnabled;
     sceneBuildConfig.CoverageFix.UserPx = CoverageFixPx;

@@ -1,4 +1,5 @@
 #include "GPU3D_AcceleratedFrontend.h"
+#include "WideMelon.h"
 
 #include <algorithm>
 #include <cmath>
@@ -116,12 +117,24 @@ u32 BuildAcceleratedRenderKey(const Polygon& polygon) noexcept
     return renderKey;
 }
 
+// WideMelon: map a native X (1/16 px, already multiplied by the render scale) into the wide render target, rounded
+// like WideMelon::MapHiresX. Identity at width 256.
+s32 MapAcceleratedFixedXToWide(s32 xFixed) noexcept
+{
+    if (!WideMelon::Enabled())
+        return xFixed;
+    const s64 numer = static_cast<s64>(xFixed) * WideMelon::Width();
+    return static_cast<s32>(numer >= 0 ? (numer + 128) / 256 : (numer - 128) / 256);
+}
+
 s32 ResolveAcceleratedVertexFixedX(const Vertex& vertex, int scale, bool useHiresCoordinates) noexcept
 {
     const int safeScale = std::max(scale, 1);
+    // Wide targets can exceed 0xFFFF in 1/16 px at high scales
+    const s32 maxFixed = WideMelon::Enabled() ? 0x7FFFFF : 0xFFFF;
     if (useHiresCoordinates)
-        return std::clamp(vertex.HiresPosition[0] * safeScale, 0, 0xFFFF);
-    return std::clamp((vertex.FinalPosition[0] << 4) * safeScale, 0, 0xFFFF);
+        return std::clamp(MapAcceleratedFixedXToWide(vertex.HiresPosition[0] * safeScale), 0, maxFixed);
+    return std::clamp(MapAcceleratedFixedXToWide((vertex.FinalPosition[0] << 4) * safeScale), 0, maxFixed);
 }
 
 s32 ResolveAcceleratedVertexFixedY(const Vertex& vertex, int scale, bool useHiresCoordinates) noexcept
@@ -480,9 +493,9 @@ void BuildAcceleratedScene(
                 if (vertex == nullptr)
                     continue;
 
-                const s32 xFixed = config.UseHiresCoordinates
+                const s32 xFixed = MapAcceleratedFixedXToWide(config.UseHiresCoordinates
                     ? vertex->HiresPosition[0] * safeScale
-                    : vertex->FinalPosition[0] << 4;
+                    : vertex->FinalPosition[0] << 4);
                 const s32 yFixed = config.UseHiresCoordinates
                     ? vertex->HiresPosition[1] * safeScale
                     : vertex->FinalPosition[1] << 4;
@@ -539,12 +552,12 @@ void BuildAcceleratedScene(
                 }
                 else if (config.UseHiresCoordinates)
                 {
-                    xFixed = vertex->HiresPosition[0] * safeScale;
+                    xFixed = MapAcceleratedFixedXToWide(vertex->HiresPosition[0] * safeScale);
                     yFixed = vertex->HiresPosition[1] * safeScale;
                 }
                 else
                 {
-                    xFixed = vertex->FinalPosition[0] << 4;
+                    xFixed = MapAcceleratedFixedXToWide(vertex->FinalPosition[0] << 4);
                     yFixed = vertex->FinalPosition[1] << 4;
                 }
             }

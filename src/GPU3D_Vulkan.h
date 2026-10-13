@@ -196,6 +196,11 @@ public:
     [[nodiscard]] VkImageView GetColorTargetImageView() const noexcept;
     [[nodiscard]] u32 GetColorTargetWidth() const noexcept;
     [[nodiscard]] u32 GetColorTargetHeight() const noexcept;
+    // WideMelon: wide raster image of the published product (VK_NULL_HANDLE when widescreen is off). Same frame and
+    // retention as GetColorTargetImage(); kept in GENERAL layout.
+    [[nodiscard]] VkImage GetWideColorTargetImage() const noexcept;
+    [[nodiscard]] u32 GetWideColorTargetWidth() const noexcept;
+    [[nodiscard]] u32 GetWideColorTargetHeight() const noexcept;
     [[nodiscard]] u64 RetainPublishedColorTargetForPresentation() noexcept;
     void ReleasePresentationColorTarget(u64 token) noexcept;
     [[nodiscard]] std::vector<u32> CaptureColorTargetForDebug();
@@ -248,7 +253,8 @@ private:
         std::array<VkDescriptorImageInfo, TextureDescriptorPageStorageCapacity> NormalizedTextureInfos{};
     };
 
-    struct FaithfulRasterProductSlot
+    // Images and framebuffers a 3D frame is rasterized into
+    struct RasterAttachmentSet
     {
         VkImage RasterColorImage = VK_NULL_HANDLE;
         VkDeviceMemory RasterColorImageMemory = VK_NULL_HANDLE;
@@ -270,6 +276,14 @@ private:
         u32 Width = 0;
         u32 Height = 0;
         bool Initialized = false;
+    };
+
+    // The slot's own attachments are the native 4:3 (256 x scale) product everything downstream reads. With WideMelon,
+    // frames are rasterized into the Wide attachments (WideMelon width x scale) and the native-width center is copied
+    // into the slot's color image after the final pass.
+    struct FaithfulRasterProductSlot : RasterAttachmentSet
+    {
+        RasterAttachmentSet Wide;
     };
 
     struct GraphicsResolvedTextureCacheEntry
@@ -443,6 +457,8 @@ private:
     void destroyRenderTarget();
     bool ensureFaithfulRasterProductSlot(FaithfulRasterProductSlot& target, u32 width, u32 height);
     void destroyFaithfulRasterProductSlot(FaithfulRasterProductSlot& target);
+    bool ensureRasterAttachmentSet(RasterAttachmentSet& target, u32 width, u32 height);
+    void destroyRasterAttachmentSet(RasterAttachmentSet& target);
     [[nodiscard]] const FaithfulRasterProductSlot* getPublishedFaithfulRasterProductSlot() const noexcept;
     [[nodiscard]] FaithfulRasterProductSlot* getContextFaithfulRasterProductSlot(RenderContext* context) noexcept;
     [[nodiscard]] CaptureSourceIdentity captureSourceIdentityForContext(

@@ -7193,6 +7193,23 @@ void SoftRenderer::DrawScanlineActivePipeline(u32 line, Unit* unit)
     // oddly that's not the case for GPU A
     if (CurUnit->Num && !CurUnit->Enabled) forceblank = true;
 
+    if (CurUnit->Num == 0 && line == 96u && WideMelon::Enabled())
+    {
+        const bool forcedBlank2D = forceblank || (CurUnit->DispCnt & (1u << 7)) != 0;
+        const bool wideScene = !forcedBlank2D && CurUnit->Enabled
+            && (CurUnit->DispCnt & 0x30108) == 0x10108;
+        u32 info = 0;
+        if (wideScene)
+            info |= 1u;
+        if (CurrentUnitTargetsTopScreen())
+            info |= 2u;
+        if (CurUnit->BlendCnt & 0x1)
+            info |= ((CurUnit->BlendCnt >> 6) & 0x3u) << 2;
+        info |= std::min<u32>(CurUnit->EVY, 16u) << 4;
+        info |= (static_cast<u32>(CurUnit->MasterBrightness) & 0xFFFFu) << 16;
+        WideMelon::SetFrameInfo(info);
+    }
+
     const bool useStructuredVulkan2D = UseStructuredVulkan2D();
 
     if (useStructuredVulkan2D && CurUnit->Num == 0 && line == 0)
