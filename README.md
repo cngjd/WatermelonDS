@@ -24,9 +24,10 @@ Pokémon Black 2 / White 2 on the AYN Thor with the **"Internal: Top, External: 
   256×192 in the middle.
 - The wide top screen shows on whichever display shows the DS top screen; the bottom screen stays 4:3 and touch
   mapping is unchanged.
-- Renderers: **OpenGL** and **Compute**. Software and **Vulkan** (incl. FastPath) always run at native 4:3; the
-  setting is hidden for them.
-- Built-in filters and RetroArch shader presets (OpenGL/Compute) work at any width.
+- Renderers: **OpenGL**, **Compute** and **Vulkan**. Software always runs at native 4:3; the setting is hidden for
+  it. Vulkan's direct present path (FastPath) is bypassed while widescreen is on.
+- RetroArch shader presets work at any width on all three renderers. The built-in filters (xBR, HQx, LCD,
+  scanlines…) work at any width on OpenGL/Compute; on Vulkan they fall back to plain sampling while widescreen is on.
 - App ID `com.sapphire.watermelonds.wide`, name "WatermelonDS Wide": installs next to stock WatermelonDS and other
   melonDS builds.
 
@@ -45,7 +46,7 @@ Releases are signed with this project's own key, so they update each other but n
 
 ## Using it
 
-Settings → Video → Renderer **OpenGL** or **Compute** → **Widescreen 3D view (WideMelon)**:
+Settings → Video → Renderer **OpenGL**, **Compute** or **Vulkan** → **Widescreen 3D view (WideMelon)**:
 
 | Value | Aspect | Notes |
 |-------|--------|-------|
@@ -57,7 +58,7 @@ Settings → Video → Renderer **OpenGL** or **Compute** → **Widescreen 3D vi
 
 Like renderer and internal resolution, it can't be changed in-game: change it from the main settings and (re)start
 the game. GPU cost grows with width × internal resolution: if 342 at 4× drops frames, try 3× (about the cost of
-4:3 at 4×) or the Compute renderer.
+4:3 at 4×). For fast-forward at ×2, Vulkan is the fastest renderer.
 
 Known limitations (game logic, not bugs): objects outside the original field of view may pop in at the screen edges
 (B2W2 overworld), and scenes that are 2D or that the game renders at 4:3 (battles, menus) stay 4:3 with black side
@@ -106,12 +107,16 @@ with `scripts/widemelon-sync.sh`.
 
 ## What changed compared to WatermelonDS
 
-Native core (`melonDS-android-lib`, branch `lib-widescreen`): `WideMelon.h` (width + projection helpers),
-`GPU3D.cpp` (X projection in `SubmitVertex`/`BoxTest`), OpenGL and Compute renderers (wide framebuffer, X mapping,
-centered display capture), GL compositor (top-screen wings, bottom side columns black).
+Native core (`melonDS-android-lib`, branch `lib-widescreen`): `WideMelon.h` (width + projection helpers, per-frame
+wing gating info), `GPU3D.cpp` (X projection in `SubmitVertex`/`BoxTest`), OpenGL and Compute renderers (wide
+framebuffer, X mapping, centered display capture), GL compositor (top-screen wings, only in real 3D scenes, with BG0
+fades; bottom side columns black), Vulkan renderer (wide raster attachments per render slot, native center copied
+into the 4:3 product).
 
 App: width setting → `RendererConfiguration.effectiveWidescreenViewWidth` → JNI → `MelonInstance`
-(`WideMelon::SetWidth`, forced to 256 for Software/Vulkan, renderer recreated on change); `ScreenTextureUVs` +
+(`WideMelon::SetWidth`, forced to 256 for Software, renderer recreated on change); Vulkan: `VulkanOutput` copies the
+wide 3D's side strips and builds the wings (`VulkanWideMelonWingsShader.comp`), `VulkanSurfacePresenter` draws them
+next to the native frame and runs RetroArch presets at the wide width; `ScreenTextureUVs` +
 `DSRenderer` / `ExternalLayoutRender` / `ExternalScreenRender` (wide top rect, cropped bottom); width-aware built-in
 filters; width-aware `OpenGlRetroArchFilter`; savestate thumbnails cropped to native 256. Save and savestate formats
 are unchanged. RetroAchievements code is untouched.

@@ -1,0 +1,68 @@
+#version 450
+
+// WideMelon (WatermelonDS Wide): builds the top screen's widescreen wings (the side columns outside the native 256 x
+// scale center) from the wide 3D render, like the OpenGL compositor does. The presenter draws them next to the
+// faithful compositor's native frame, so only the wing strips are processed here.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// Both images: left strip in [0, pad), right strip in [pad, 2 * pad), pad = (wideWidth - 256) / 2 * scale; 192 * scale
+// rows (top screen only)
+layout(binding = 0, rgba8) uniform readonly image2D wings3d;   // 3D render of the wing strips
+layout(binding = 1, rgba8) uniform writeonly image2D wingsOut; // final wing colors (BGR like the faithful output)
+
+layout(push_constant) uniform PushConstants
+{
+    uint frameInfo;   // WideMelon::FrameInfo()
+    uint has3d;       // wings3d holds this frame's 3D
+} pc;
+
+// WideMelon::FrameInfo() layout
+const uint kInfoWideScene = 1u << 0u;
+const uint kInfoEngineAOnTop = 1u << 1u;
+
+ivec3 applyMasterBrightness(ivec3 color, uint masterBrightness)
+{
+    uint mode = (masterBrightness >> 14u) & 0x3u;
+    int factor = int(min(masterBrightness & 0x1Fu, 16u));
+    if (mode == 1u)
+        color += ((ivec3(0x3F) - color) * factor) >> 4;
+    else if (mode == 2u)
+        color -= ((color * factor) + 0xF) >> 4;
+    return color;
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(wingsOut);
+    if (p.x >= size.x || p.y >= size.y)
+        return;
+
+    // Wings only show 3D when engine A (3D) is on the top screen and the scene really displays 3D
+    vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
+    uint info = pc.frameInfo;
+    if (pc.has3d != 0u && (info & kInfoWideScene) != 0u && (info & kInfoEngineAOnTop) != 0u)
+    {
+        vec4 t3 = imageLoad(wings3d, p);
+        uint a5 = uint(t3.a * 255.0 + 0.5) >> 3u;
+        if (a5 > 0u)
+        {
+            ivec3 c6 = ivec3(uvec3(t3.rgb * 255.0 + 0.5) >> 2u);
+
+            // BG0 brightness fade (BLDCNT effect 2/3 with BG0 as 1st target)
+            uint effect = (info >> 2u) & 0x3u;
+            int evy = int((info >> 4u) & 0x1Fu);
+            if (effect == 2u)
+                c6 += ((ivec3(0x3F) - c6) * evy + 0x8) >> 4;
+            else if (effect == 3u)
+                c6 -= (c6 * evy + 0x7) >> 4;
+
+            c6 = clamp(applyMasterBrightness(c6, info >> 16u), ivec3(0), ivec3(0x3F));
+            ivec3 c8 = (c6 << 2) | (c6 >> 4);
+            // The faithful output is stored BGR (the presenter samples .bgr)
+            color = vec4(vec3(c8.bgr) / 255.0, 1.0);
+        }
+    }
+    imageStore(wingsOut, p, color);
+}
