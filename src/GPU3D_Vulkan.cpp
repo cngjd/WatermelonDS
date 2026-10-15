@@ -29,6 +29,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -110,6 +111,7 @@ constexpr u32 kWorkActiveGroupCount = 7u;
 constexpr u32 kWorkTileOffsetsBase = 8u;
 constexpr u32 kCpuActiveTileDispatchMaxCoveragePercent = 90u;
 constexpr VkFormat kGraphicsColorTargetFormat = VK_FORMAT_R8G8B8A8_UNORM;
+constexpr VkFormat kGraphicsAttrTargetFormat = VK_FORMAT_R8G8B8A8_UNORM;
 constexpr u32 kRenderer3DDebugFeatureRendererOutput = 1u << 0u;
 
 struct PlainRearPlaneMaterial
@@ -584,11 +586,11 @@ u32 ConvertBgraToRgba8(u32 packedColor)
     return ((rb & 0x000000FFu) << 16) | g | ((rb & 0x00FF0000u) >> 16) | a;
 }
 
-u32 PackOpenGlAttrToLogical(u32 packedColor)
+u32 PackGraphicsAttrToLogical(u32 packedColor)
 {
     const u32 polyIdByte = packedColor & 0xFFu;
-    const u32 edgeByte = (packedColor >> 8u) & 0xFFu;
-    const u32 fogByte = (packedColor >> 16u) & 0xFFu;
+    const u32 fogByte = (packedColor >> 8u) & 0xFFu;
+    const u32 edgeByte = (packedColor >> 16u) & 0xFFu;
 
     const u32 polyId = ((polyIdByte * 63u) + 127u) / 255u;
     u32 attr = (polyId & 0x3Fu) << 24u;
@@ -2876,14 +2878,6 @@ void VulkanRenderer3D::destroyVulkan()
             pipeline = VK_NULL_HANDLE;
         }
     }
-    for (VkPipeline& pipeline : GraphicsOpaqueFastModulateOpaqueAlphaPlainNoDepthNoAttrPipelines)
-    {
-        if (pipeline != VK_NULL_HANDLE)
-        {
-            vkDestroyPipeline(Device, pipeline, nullptr);
-            pipeline = VK_NULL_HANDLE;
-        }
-    }
     for (VkPipeline& pipeline : GraphicsOpaqueFastModulateOpaqueAlphaPlainColorOnlyPipelines)
     {
         if (pipeline != VK_NULL_HANDLE)
@@ -4683,7 +4677,7 @@ bool VulkanRenderer3D::createGraphicsPipelines()
     colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkAttachmentDescription attrAttachment = colorAttachment;
-    attrAttachment.format = VK_FORMAT_R8G8_UNORM;
+    attrAttachment.format = kGraphicsAttrTargetFormat;
     attrAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     const bool usesGraphicsProductResources = true;
@@ -5029,12 +5023,13 @@ bool VulkanRenderer3D::createGraphicsPipelines()
             static_cast<u32>(sizeof(GraphicsVertexGpu)),
             VK_VERTEX_INPUT_RATE_VERTEX,
         };
-        const std::array<VkVertexInputAttributeDescription, 5> vertexAttributeDescriptions = {{
+        const std::array<VkVertexInputAttributeDescription, 6> vertexAttributeDescriptions = {{
             {0u, 0u, VK_FORMAT_R32G32B32A32_SFLOAT, 0u},
             {1u, 0u, VK_FORMAT_R32G32_SFLOAT, 16u},
             {2u, 0u, VK_FORMAT_R8G8B8A8_UINT, 24u},
             {3u, 0u, VK_FORMAT_R32G32B32A32_UINT, 28u},
             {4u, 0u, VK_FORMAT_R32G32B32_UINT, 44u},
+            {5u, 0u, VK_FORMAT_R16G16B16A16_SINT, 56u},
         }};
         VkPipelineVertexInputStateCreateInfo vertexInputState{};
         vertexInputState.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -5140,12 +5135,13 @@ bool VulkanRenderer3D::createGraphicsPipelines()
             static_cast<u32>(sizeof(GraphicsVertexGpu)),
             VK_VERTEX_INPUT_RATE_VERTEX,
         };
-        const std::array<VkVertexInputAttributeDescription, 5> vertexAttributeDescriptions = {{
+        const std::array<VkVertexInputAttributeDescription, 6> vertexAttributeDescriptions = {{
             {0u, 0u, VK_FORMAT_R32G32B32A32_SFLOAT, 0u},
             {1u, 0u, VK_FORMAT_R32G32_SFLOAT, 16u},
             {2u, 0u, VK_FORMAT_R8G8B8A8_UINT, 24u},
             {3u, 0u, VK_FORMAT_R32G32B32A32_UINT, 28u},
             {4u, 0u, VK_FORMAT_R32G32B32_UINT, 44u},
+            {5u, 0u, VK_FORMAT_R16G16B16A16_SINT, 56u},
         }};
         VkPipelineVertexInputStateCreateInfo vertexInputState{};
         vertexInputState.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -5768,7 +5764,7 @@ bool VulkanRenderer3D::createGraphicsPipelines()
                     true,
                     VK_STENCIL_OP_KEEP,
                     VK_STENCIL_OP_KEEP,
-                    VK_STENCIL_OP_KEEP,
+                    VK_STENCIL_OP_ZERO,
                     VK_COMPARE_OP_EQUAL,
                     &GraphicsOpaqueStencilResolvePipelines[makeOpaqueIndex(wMode, depthCompareMode)]))
             {
@@ -6032,7 +6028,7 @@ bool VulkanRenderer3D::createGraphicsPipelines()
                         rasterNoFragDepthDirectFastModulateOpaqueAlphaPlainNoAttrFragModule,
                         &opaqueSpecializationInfo,
                         opaqueNoAttrBlendAttachments,
-                        false,
+                        true,
                         depthCompareMode != 0u ? VK_COMPARE_OP_LESS_OR_EQUAL : VK_COMPARE_OP_LESS,
                         true,
                         VK_STENCIL_OP_KEEP,
@@ -6052,25 +6048,6 @@ bool VulkanRenderer3D::createGraphicsPipelines()
                         &GraphicsOpaqueFastModulateOpaqueAlphaPlainColorOnlyPipelines[makeOpaqueIndex(wMode, depthCompareMode)]))
                 {
                     Log(LogLevel::Error, "VulkanRenderer3D: failed to create graphics opaque fast-modulate-opaque-alpha-plain color-only pipeline");
-                    return false;
-                }
-                if (usesGraphicsProductResources
-                    && !createRasterPipeline(
-                        rasterNoFragDepthDirectFastModulateOpaqueAlphaPlainNoAttrFragModule,
-                        &opaqueSpecializationInfo,
-                        opaqueNoAttrBlendAttachments,
-                        false,
-                        depthCompareMode != 0u ? VK_COMPARE_OP_LESS_OR_EQUAL : VK_COMPARE_OP_LESS,
-                        false,
-                        VK_STENCIL_OP_KEEP,
-                        VK_STENCIL_OP_KEEP,
-                        VK_STENCIL_OP_KEEP,
-                        VK_COMPARE_OP_ALWAYS,
-                        &GraphicsOpaqueFastModulateOpaqueAlphaPlainNoDepthNoAttrPipelines[makeOpaqueIndex(wMode, depthCompareMode)],
-                        VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-                        false))
-                {
-                    Log(LogLevel::Error, "VulkanRenderer3D: failed to create graphics opaque fast-modulate-opaque-alpha-plain no-depth no-attr pipeline");
                     return false;
                 }
                 if (usesGraphicsProductResources
@@ -6330,7 +6307,7 @@ bool VulkanRenderer3D::createGraphicsPipelines()
 
         const std::array<VkPipelineColorBlendAttachmentState, 3> edgeMarkBlendAttachments = {
             makeBlendAttachment(colorWriteNone, false, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD),
-            makeBlendAttachment(VK_COLOR_COMPONENT_G_BIT, false, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD),
+            makeBlendAttachment(colorWriteB, false, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD),
             makeBlendAttachment(colorWriteNone, false, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD),
         };
         VkShaderModule edgeMarkFragModule = rasterFragModule;
@@ -6706,7 +6683,7 @@ bool VulkanRenderer3D::ensureRenderTarget(u32 width, u32 height)
     if (GraphicsReady)
     {
         if (!createImage(
-                VK_FORMAT_R8G8_UNORM,
+                kGraphicsAttrTargetFormat,
                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                 VK_IMAGE_ASPECT_COLOR_BIT,
                 AttrImage,
@@ -7041,7 +7018,7 @@ bool VulkanRenderer3D::ensureFaithfulRasterProductSlot(FaithfulRasterProductSlot
     }
 
     if (!createImage(
-            VK_FORMAT_R8G8_UNORM,
+            kGraphicsAttrTargetFormat,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
             VK_IMAGE_ASPECT_COLOR_BIT,
             target.AttrImage,
@@ -7245,12 +7222,13 @@ void VulkanRenderer3D::destroyTriangleBuffer(RenderContext* context)
 
 bool VulkanRenderer3D::ensureGraphicsVertexBuffer(RenderContext* context, size_t vertexCount)
 {
-    static_assert(sizeof(GraphicsVertexGpu) == 56u, "GraphicsVertexGpu layout must match vertex shader inputs");
+    static_assert(sizeof(GraphicsVertexGpu) == 64u, "GraphicsVertexGpu layout must match vertex shader inputs");
     static_assert(offsetof(GraphicsVertexGpu, x) == 0u, "GraphicsVertexGpu.x offset mismatch");
     static_assert(offsetof(GraphicsVertexGpu, u) == 16u, "GraphicsVertexGpu.u offset mismatch");
     static_assert(offsetof(GraphicsVertexGpu, colorRgba8) == 24u, "GraphicsVertexGpu.colorRgba8 offset mismatch");
     static_assert(offsetof(GraphicsVertexGpu, flags) == 28u, "GraphicsVertexGpu.flags offset mismatch");
     static_assert(offsetof(GraphicsVertexGpu, texHeight) == 44u, "GraphicsVertexGpu.texHeight offset mismatch");
+    static_assert(offsetof(GraphicsVertexGpu, texcoordBounds) == 56u, "GraphicsVertexGpu.texcoordBounds offset mismatch");
     VkBuffer& graphicsVertexBuffer = context != nullptr ? context->GraphicsVertexBuffer : GraphicsVertexBuffer;
     VkDeviceMemory& graphicsVertexMemory = context != nullptr ? context->GraphicsVertexMemory : GraphicsVertexMemory;
     VkDeviceSize& graphicsVertexBufferSize = context != nullptr ? context->GraphicsVertexBufferSize : GraphicsVertexBufferSize;
@@ -7314,7 +7292,7 @@ void VulkanRenderer3D::destroyGraphicsVertexBuffer(RenderContext* context)
 
 bool VulkanRenderer3D::ensureGraphicsSceneVertexBuffer(size_t vertexCount, RenderContext* context)
 {
-    static_assert(sizeof(GraphicsVertexGpu) == 56u, "GraphicsVertexGpu layout must match vertex shader inputs");
+    static_assert(sizeof(GraphicsVertexGpu) == 64u, "GraphicsVertexGpu layout must match vertex shader inputs");
     VkBuffer& graphicsSceneVertexBuffer = context != nullptr
         ? context->GraphicsSceneVertexBuffer : GraphicsSceneVertexBuffer;
     VkDeviceMemory& graphicsSceneVertexMemory = context != nullptr
@@ -10214,7 +10192,7 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
         }
     };
     bool graphicsFogWriteObserved = false;
-    const auto fastOpaqueModulatePipelineFor = [&](const GraphicsPolygonDraw& draw, u32 pipelineIndex, bool noAttr, bool noDepthNoAttr = false) -> VkPipeline {
+    const auto fastOpaqueModulatePipelineFor = [&](const GraphicsPolygonDraw& draw, u32 pipelineIndex, bool noAttr) -> VkPipeline {
         if (sondaFsBarato)
         {
             const VkPipeline barato = sondaPipelineBarato(draw, pipelineIndex);
@@ -10291,12 +10269,6 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
         {
             if (fullAlpha)
             {
-                if (noDepthNoAttr)
-                {
-                    VkPipeline pipeline = GraphicsOpaqueFastModulateOpaqueAlphaPlainNoDepthNoAttrPipelines[pipelineIndex];
-                    if (pipeline != VK_NULL_HANDLE)
-                        return pipeline;
-                }
                 VkPipeline pipeline = noAttr
                     ? GraphicsOpaqueFastModulateOpaqueAlphaPlainNoAttrPipelines[pipelineIndex]
                     : GraphicsOpaqueFastModulateOpaqueAlphaPlainPipelines[pipelineIndex];
@@ -10440,29 +10412,10 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
         drawCount++;
         return true;
     };
-    const auto isNoDepthNoAttrFastOpaqueCandidate = [&](const GraphicsPolygonDraw& draw, bool noAttr, bool opaqueDepthWriteAlreadySeen) -> bool {
-        const bool drawDepthWriteEnabled = (draw.polyAttr & (1u << 11u)) != 0u;
-        const TriangleGpu* firstTriangle = draw.firstTriangle < Triangles.size() ? &Triangles[draw.firstTriangle] : nullptr;
-        const u32 firstTriangleFlags = firstTriangle != nullptr ? firstTriangle->flags : 0u;
-        const u32 firstTexParam = firstTriangle != nullptr ? firstTriangle->texParam : 0u;
-        return noAttr
-            && !frameHasAttrDependentPostPasses
-            && !opaqueDepthWriteAlreadySeen
-            && !drawDepthWriteEnabled
-            && firstTriangle != nullptr
-            && (firstTriangleFlags & kTriangleFlagWBuffer) != 0u
-            && (firstTriangleFlags & kTriangleFlagTextured) != 0u
-            && (firstTriangleFlags & kTriangleFlagTextureOpaque) != 0u
-            && (firstTriangleFlags & kTriangleFlagDecal) == 0u
-            && (firstTexParam & ((1u << 16u) | (1u << 17u) | (1u << 18u) | (1u << 19u))) != 0u
-            && ((draw.polyAttr >> 16u) & 0x1Fu) == 0x1Fu
-            && ((draw.polyAttr >> 4u) & 0x3u) == 0u;
-    };
     const auto fastOpaqueDrawsCanBatch = [&](const GraphicsPolygonDraw& firstDraw,
                                              VkPipeline firstPipeline,
                                              u32 firstPipelineIndex,
-                                             const GraphicsPolygonDraw& nextDraw,
-                                             bool nextNoDepthNoAttr) -> bool {
+                                             const GraphicsPolygonDraw& nextDraw) -> bool {
         if (firstPipeline == VK_NULL_HANDLE
             || firstDraw.triangleCount == 0u
             || nextDraw.triangleCount == 0u
@@ -10482,7 +10435,7 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
         const u32 nextPipelineIndex = opaquePipelineIndexFor(nextDraw);
         if (nextPipelineIndex != firstPipelineIndex)
             return false;
-        if (fastOpaqueModulatePipelineFor(nextDraw, nextPipelineIndex, canSkipOpaqueAttrWrite(nextDraw), nextNoDepthNoAttr) != firstPipeline)
+        if (fastOpaqueModulatePipelineFor(nextDraw, nextPipelineIndex, canSkipOpaqueAttrWrite(nextDraw)) != firstPipeline)
             return false;
 
         const TriangleGpu& firstTriangle = Triangles[firstDraw.firstTriangle];
@@ -10496,8 +10449,7 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
     const auto countFastOpaqueBatchBreak = [&](const GraphicsPolygonDraw& firstDraw,
                                                VkPipeline firstPipeline,
                                                u32 firstPipelineIndex,
-                                               const GraphicsPolygonDraw& nextDraw,
-                                               bool nextNoDepthNoAttr) {
+                                               const GraphicsPolygonDraw& nextDraw) {
         if (firstPipeline == VK_NULL_HANDLE
             || firstDraw.triangleCount == 0u
             || nextDraw.triangleCount == 0u
@@ -10538,7 +10490,7 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
 
         const u32 nextPipelineIndex = opaquePipelineIndexFor(nextDraw);
         if (nextPipelineIndex != firstPipelineIndex
-            || fastOpaqueModulatePipelineFor(nextDraw, nextPipelineIndex, canSkipOpaqueAttrWrite(nextDraw), nextNoDepthNoAttr) != firstPipeline)
+            || fastOpaqueModulatePipelineFor(nextDraw, nextPipelineIndex, canSkipOpaqueAttrWrite(nextDraw)) != firstPipeline)
         {
             graphicsPassDebugStats.denseOpaqueBatchBreakPipeline++;
             return;
@@ -11353,7 +11305,6 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
         return true;
     };
 
-    bool opaqueDepthWriteSeen = false;
     currentGraphicsDebugPassKind = GraphicsDebugPassKind::Opaque;
 
     static const bool prepassGlobal = [] {
@@ -11401,7 +11352,7 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
             const bool noAttr = canSkipOpaqueAttrWrite(draw);
             if (!noAttr)
                 countOpaqueNoAttrMiss(draw);
-            VkPipeline pipeline = fastOpaqueModulatePipelineFor(draw, pipelineIndex, noAttr, false);
+            VkPipeline pipeline = fastOpaqueModulatePipelineFor(draw, pipelineIndex, noAttr);
             if (pipeline == VK_NULL_HANDLE)
                 pipeline = opaquePipelineFor(draw, pipelineIndex, noAttr);
             if (pipeline == VK_NULL_HANDLE)
@@ -11487,13 +11438,13 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
         const u32 pipelineIndex = opaquePipelineIndexFor(draw);
         if (opaqueFragmentDepthPrepassSelected[drawIndex] != 0u)
         {
-            const u32 polyId = (draw.polyAttr >> 24u) & 0x3Fu;
+            const u32 prepassStencilRef = 0x80u | ((draw.polyAttr >> 24u) & 0x3Fu);
             const VkPipeline prepassPipeline = fragmentDepthPrepassPipelineFor(draw, pipelineIndex);
             const VkPipeline resolvePipeline = pipelineIndex < GraphicsOpaqueStencilResolvePipelines.size()
                 ? GraphicsOpaqueStencilResolvePipelines[pipelineIndex]
                 : VK_NULL_HANDLE;
-            bindAndDrawGraphics(draw, prepassPipeline, 0xFFu, 0xFFu, polyId);
-            if (bindAndDrawGraphics(draw, resolvePipeline, 0xFFu, 0x00u, polyId))
+            bindAndDrawGraphics(draw, prepassPipeline, 0xFFu, 0xFFu, prepassStencilRef);
+            if (bindAndDrawGraphics(draw, resolvePipeline, 0xFFu, 0x80u, prepassStencilRef))
                 graphicsPassDebugStats.opaque++;
             continue;
         }
@@ -11501,11 +11452,7 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
         const bool noAttr = canSkipOpaqueAttrWrite(draw);
         if (!noAttr)
             countOpaqueNoAttrMiss(draw);
-        const bool drawDepthWriteEnabled = (draw.polyAttr & (1u << 11u)) != 0u;
-        const bool noDepthNoAttr = isNoDepthNoAttrFastOpaqueCandidate(draw, noAttr, opaqueDepthWriteSeen);
-        if (drawDepthWriteEnabled)
-            opaqueDepthWriteSeen = true;
-        const VkPipeline fastPipeline = fastOpaqueModulatePipelineFor(draw, pipelineIndex, noAttr, noDepthNoAttr);
+        const VkPipeline fastPipeline = fastOpaqueModulatePipelineFor(draw, pipelineIndex, noAttr);
         VkPipeline pipeline = fastPipeline;
         if (pipeline == VK_NULL_HANDLE)
         {
@@ -11517,10 +11464,6 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
 
         if (pipeline == VK_NULL_HANDLE)
             continue;
-        const bool usedNoDepthNoAttr =
-            noDepthNoAttr
-            && pipelineIndex < GraphicsOpaqueFastModulateOpaqueAlphaPlainNoDepthNoAttrPipelines.size()
-            && pipeline == GraphicsOpaqueFastModulateOpaqueAlphaPlainNoDepthNoAttrPipelines[pipelineIndex];
         if (rasterDispatchPolicy.enableFastOpaqueBatching
             && pipeline == fastPipeline
             && fastPipeline != VK_NULL_HANDLE)
@@ -11540,11 +11483,9 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
                 const GraphicsPolygonDraw& nextDraw = GraphicsPolygons[nextDrawIndex];
                 GraphicsPolygonDraw mergedDraw = draw;
                 mergedDraw.triangleCount = mergedTriangleCount;
-                const bool nextNoAttr = canSkipOpaqueAttrWrite(nextDraw);
-                const bool nextNoDepthNoAttr = isNoDepthNoAttrFastOpaqueCandidate(nextDraw, nextNoAttr, opaqueDepthWriteSeen);
-                if (!fastOpaqueDrawsCanBatch(mergedDraw, pipeline, pipelineIndex, nextDraw, nextNoDepthNoAttr))
+                if (!fastOpaqueDrawsCanBatch(mergedDraw, pipeline, pipelineIndex, nextDraw))
                 {
-                    countFastOpaqueBatchBreak(mergedDraw, pipeline, pipelineIndex, nextDraw, nextNoDepthNoAttr);
+                    countFastOpaqueBatchBreak(mergedDraw, pipeline, pipelineIndex, nextDraw);
                     break;
                 }
 
@@ -11559,8 +11500,6 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
                 graphicsPassDebugStats.opaque += mergedSourceDraws;
                 if (noAttr)
                     graphicsPassDebugStats.opaqueNoAttr += mergedSourceDraws;
-                if (usedNoDepthNoAttr)
-                    graphicsPassDebugStats.opaqueNoDepthNoAttr += mergedSourceDraws;
                 graphicsPassDebugStats.fastOpaqueBatchCommands++;
                 graphicsPassDebugStats.fastOpaqueBatchSavedDraws += mergedSourceDraws - 1u;
                 continue;
@@ -11626,8 +11565,6 @@ bool VulkanRenderer3D::dispatchGraphicsRasterAndReadback(
             graphicsPassDebugStats.opaque++;
             if (noAttr)
                 graphicsPassDebugStats.opaqueNoAttr++;
-            if (usedNoDepthNoAttr)
-                graphicsPassDebugStats.opaqueNoDepthNoAttr++;
         }
     }
     currentGraphicsDebugPassKind = GraphicsDebugPassKind::Other;
@@ -13330,7 +13267,7 @@ bool VulkanRenderer3D::readbackGraphicsAttrImageToCpu(std::vector<u32>& outAttrP
     std::memcpy(rawPixels.data(), ReadbackMapped, pixelCount * sizeof(u32));
     outAttrPixels.resize(pixelCount);
     for (size_t i = 0; i < pixelCount; i++)
-        outAttrPixels[i] = PackOpenGlAttrToLogical(rawPixels[i]);
+        outAttrPixels[i] = PackGraphicsAttrToLogical(rawPixels[i]);
     return true;
 }
 
@@ -13708,6 +13645,8 @@ void VulkanRenderer3D::buildGraphicsTriangleList(GPU& gpu)
     constexpr u32 kTriangleFlagTopLeftEdge1 = 1u << 12u;
     constexpr u32 kTriangleFlagTopLeftEdge2 = 1u << 13u;
     constexpr u32 kTriangleFlagTextureOpaque = 1u << 14u;
+    constexpr u32 kTriangleFlagTexcoordBounds = 1u << 15u;
+    constexpr u32 kTriangleFlagIntegralTexcoordPlane = 1u << 16u;
     constexpr u32 kVariantFlagTextured = 1u << 0u;
     constexpr u32 kVariantFlagDecal = 1u << 1u;
     constexpr u32 kVariantFlagModulate = 1u << 2u;
@@ -13766,6 +13705,141 @@ void VulkanRenderer3D::buildGraphicsTriangleList(GPU& gpu)
             polygonYBot = std::min<u32>(targetHeight, polygonYTop + 1u);
 
         return (polygonYTop & 0xFFFFu) | ((polygonYBot & 0xFFFFu) << 16u);
+    };
+
+    struct LinearTexcoordPlane
+    {
+        std::array<double, 2> origin;
+        std::array<double, 2> base;
+        std::array<double, 2> dx;
+        std::array<double, 2> dy;
+        std::array<s16, 4> bounds;
+        bool integralGradients;
+    };
+
+    const auto linearTexcoordPlaneFor = [&](const AcceleratedSceneDraw& draw) -> std::optional<LinearTexcoordPlane> {
+        const Polygon* polygon = draw.SourcePolygon;
+        if (draw.CoverageFixState.Apply || polygon == nullptr
+            || polygon->NumVertices < 3u || polygon->NumVertices > std::size(polygon->Vertices)
+            || draw.VertexCount < 3u || draw.FirstVertex >= SharedGraphicsScene.Vertices.size()
+            || draw.VertexCount > SharedGraphicsScene.Vertices.size() - draw.FirstVertex
+            || polygon->FinalW[0] <= 0 || (polygon->FinalW[0] & 0x7F) != 0)
+        {
+            return std::nullopt;
+        }
+
+        for (u32 i = 0u; i < draw.VertexCount; i++)
+        {
+            if (SharedGraphicsScene.Vertices[draw.FirstVertex + i].W != static_cast<u32>(polygon->FinalW[0]))
+                return std::nullopt;
+        }
+
+        std::array<s16, 4> bounds{
+            std::numeric_limits<s16>::max(), std::numeric_limits<s16>::max(),
+            std::numeric_limits<s16>::min(), std::numeric_limits<s16>::min(),
+        };
+        std::array<s32, 2> subpixelOffset{};
+        for (u32 i = 0u; i < polygon->NumVertices; i++)
+        {
+            const Vertex* vertex = polygon->Vertices[i];
+            if (vertex == nullptr || polygon->FinalW[i] != polygon->FinalW[0]
+                || vertex->FinalPosition[0] < 0 || vertex->FinalPosition[0] > 256
+                || vertex->FinalPosition[1] < 0 || vertex->FinalPosition[1] > 192)
+            {
+                return std::nullopt;
+            }
+            const std::array<s32, 2> offset{
+                vertex->HiresPosition[0] - vertex->FinalPosition[0] * 16,
+                vertex->HiresPosition[1] - vertex->FinalPosition[1] * 16,
+            };
+            if (offset[0] < 0 || offset[0] >= 16 || offset[1] < 0 || offset[1] >= 16)
+                return std::nullopt;
+            if (i == 0u)
+                subpixelOffset = offset;
+            else if (offset != subpixelOffset)
+                return std::nullopt;
+            bounds[0] = std::min(bounds[0], vertex->TexCoords[0]);
+            bounds[1] = std::min(bounds[1], vertex->TexCoords[1]);
+            bounds[2] = std::max(bounds[2], vertex->TexCoords[0]);
+            bounds[3] = std::max(bounds[3], vertex->TexCoords[1]);
+        }
+
+        const Vertex& origin = *polygon->Vertices[0];
+        const auto delta = [&](const Vertex& vertex) {
+            return std::array<s64, 4>{
+                static_cast<s64>(vertex.FinalPosition[0]) - origin.FinalPosition[0],
+                static_cast<s64>(vertex.FinalPosition[1]) - origin.FinalPosition[1],
+                static_cast<s64>(vertex.TexCoords[0]) - origin.TexCoords[0],
+                static_cast<s64>(vertex.TexCoords[1]) - origin.TexCoords[1],
+            };
+        };
+
+        for (u32 i = 1u; i + 1u < polygon->NumVertices; i++)
+        {
+            const auto a = delta(*polygon->Vertices[i]);
+            const auto b = delta(*polygon->Vertices[i + 1u]);
+            const s64 determinant = a[0] * b[1] - b[0] * a[1];
+            if (determinant == 0)
+                continue;
+
+            const s64 sx = a[2] * b[1] - b[2] * a[1];
+            const s64 sy = a[0] * b[2] - b[0] * a[2];
+            const s64 tx = a[3] * b[1] - b[3] * a[1];
+            const s64 ty = a[0] * b[3] - b[0] * a[3];
+            for (u32 j = 1u; j < polygon->NumVertices; j++)
+            {
+                const auto v = delta(*polygon->Vertices[j]);
+                if (v[2] * determinant != sx * v[0] + sy * v[1]
+                    || v[3] * determinant != tx * v[0] + ty * v[1])
+                {
+                    return std::nullopt;
+                }
+            }
+
+            const bool integralGradients = sx % determinant == 0 && sy % determinant == 0
+                && tx % determinant == 0 && ty % determinant == 0;
+            if (subpixelOffset[0] != 0 || subpixelOffset[1] != 0)
+            {
+                if (!integralGradients || polygon->NumVertices != 4u)
+                    return std::nullopt;
+                s32 left = 256, top = 192, right = 0, bottom = 0;
+                for (u32 j = 0u; j < polygon->NumVertices; j++)
+                {
+                    const Vertex& vertex = *polygon->Vertices[j];
+                    left = std::min(left, vertex.FinalPosition[0]);
+                    top = std::min(top, vertex.FinalPosition[1]);
+                    right = std::max(right, vertex.FinalPosition[0]);
+                    bottom = std::max(bottom, vertex.FinalPosition[1]);
+                }
+                u32 corners = 0u;
+                for (u32 j = 0u; j < polygon->NumVertices; j++)
+                {
+                    const Vertex& vertex = *polygon->Vertices[j];
+                    const bool atRight = vertex.FinalPosition[0] == right;
+                    const bool atBottom = vertex.FinalPosition[1] == bottom;
+                    if ((!atRight && vertex.FinalPosition[0] != left)
+                        || (!atBottom && vertex.FinalPosition[1] != top))
+                        return std::nullopt;
+                    corners |= 1u << (static_cast<u32>(atRight) | (static_cast<u32>(atBottom) << 1u));
+                }
+                if (corners != 0xFu)
+                    return std::nullopt;
+                bounds[0] += std::max<s64>(0, -sx / determinant) + std::max<s64>(0, -sy / determinant);
+                bounds[1] += std::max<s64>(0, -tx / determinant) + std::max<s64>(0, -ty / determinant);
+                bounds[2] -= std::max<s64>(0, sx / determinant) + std::max<s64>(0, sy / determinant);
+                bounds[3] -= std::max<s64>(0, tx / determinant) + std::max<s64>(0, ty / determinant);
+            }
+            const double divisor = static_cast<double>(determinant) * scale;
+            return LinearTexcoordPlane{
+                {(origin.FinalPosition[0] + 0.5) * scale, (origin.FinalPosition[1] + 0.5) * scale},
+                {static_cast<double>(origin.TexCoords[0]), static_cast<double>(origin.TexCoords[1])},
+                {static_cast<double>(sx) / divisor, static_cast<double>(tx) / divisor},
+                {static_cast<double>(sy) / divisor, static_cast<double>(ty) / divisor},
+                bounds,
+                integralGradients,
+            };
+        }
+        return std::nullopt;
     };
 
     std::unordered_set<TextureLookupKey, TextureLookupHasher> reservedAlphaTextureKeys{};
@@ -14113,22 +14187,43 @@ void VulkanRenderer3D::buildGraphicsTriangleList(GPU& gpu)
                 to8From5(va));
         };
 
+        const std::optional<LinearTexcoordPlane> texcoordPlane = hasTexture
+            ? linearTexcoordPlaneFor(sceneDraw)
+            : std::nullopt;
+        const u32 texcoordFlags = texcoordPlane
+            ? kTriangleFlagTexcoordBounds
+                | (texcoordPlane->integralGradients ? kTriangleFlagIntegralTexcoordPlane : 0u)
+            : 0u;
+        const std::array<s16, 4> texcoordBounds = texcoordPlane
+            ? texcoordPlane->bounds : std::array<s16, 4>{};
+        const auto texcoordFor = [&](float x, float y, float u, float v) -> std::array<float, 2> {
+            if (!texcoordPlane)
+                return {u, v};
+            const double dx = static_cast<double>(x) - texcoordPlane->origin[0];
+            const double dy = static_cast<double>(y) - texcoordPlane->origin[1];
+            return {
+                static_cast<float>(texcoordPlane->base[0] + texcoordPlane->dx[0] * dx + texcoordPlane->dy[0] * dy),
+                static_cast<float>(texcoordPlane->base[1] + texcoordPlane->dx[1] * dx + texcoordPlane->dy[1] * dy),
+            };
+        };
         const auto makeSceneGraphicsVertex = [&](const AcceleratedSceneVertex& vertex) -> GraphicsVertexGpu {
             GraphicsVertexGpu graphicsVertex{};
             graphicsVertex.x = vertex.X;
             graphicsVertex.y = vertex.Y;
             graphicsVertex.z = static_cast<float>(vertex.Z);
             graphicsVertex.reciprocalW = 1.0f / static_cast<float>(std::max<u32>(1u, vertex.W));
-            graphicsVertex.u = static_cast<float>(vertex.TexCoordS);
-            graphicsVertex.v = static_cast<float>(vertex.TexCoordT);
+            const auto texcoord = texcoordFor(vertex.X, vertex.Y, vertex.TexCoordS, vertex.TexCoordT);
+            graphicsVertex.u = texcoord[0];
+            graphicsVertex.v = texcoord[1];
             graphicsVertex.colorRgba8 = makeColor(vertex);
-            graphicsVertex.flags = sceneVertexFlags;
+            graphicsVertex.flags = sceneVertexFlags | texcoordFlags;
             graphicsVertex.texLayer = textureLayer;
             graphicsVertex.texArrayIndex = hasTexture ? textureDescriptorIndex : 0u;
             graphicsVertex.texWidth = hasTexture ? texWidth : 0u;
             graphicsVertex.texHeight = hasTexture ? texHeight : 0u;
             graphicsVertex.texParam = hasTexture ? polygon->TexParam : 0u;
             graphicsVertex.polyAttr = polygonMeta.PolyAttr;
+            graphicsVertex.texcoordBounds = texcoordBounds;
             return graphicsVertex;
         };
 
@@ -14291,16 +14386,18 @@ void VulkanRenderer3D::buildGraphicsTriangleList(GPU& gpu)
                 graphicsVertex.y = vertexData.y;
                 graphicsVertex.z = vertexData.z;
                 graphicsVertex.reciprocalW = reciprocalW(vertexData.w);
-                graphicsVertex.u = vertexData.u;
-                graphicsVertex.v = vertexData.v;
+                const auto texcoord = texcoordFor(vertexData.x, vertexData.y, vertexData.u, vertexData.v);
+                graphicsVertex.u = texcoord[0];
+                graphicsVertex.v = texcoord[1];
                 graphicsVertex.colorRgba8 = vertexData.colorRgba8;
-                graphicsVertex.flags = triangle.flags;
+                graphicsVertex.flags = triangle.flags | texcoordFlags;
                 graphicsVertex.texLayer = triangle.texLayer;
                 graphicsVertex.texArrayIndex = triangle.texArrayIndex;
                 graphicsVertex.texWidth = triangle.texWidth;
                 graphicsVertex.texHeight = triangle.texHeight;
                 graphicsVertex.texParam = triangle.texParam;
                 graphicsVertex.polyAttr = triangle.polyAttr;
+                graphicsVertex.texcoordBounds = texcoordBounds;
                 GraphicsVertices.push_back(graphicsVertex);
             };
 

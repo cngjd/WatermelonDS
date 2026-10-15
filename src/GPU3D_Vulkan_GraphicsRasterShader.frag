@@ -32,7 +32,7 @@
 #define MELONDS_COLOR_ONLY 0
 #endif
 
-const uint MAX_TEXTURE_DESCRIPTORS = 256u;
+const uint MAX_TEXTURE_DESCRIPTORS = 2049u;
 
 const uint TEXTURE_DESCRIPTOR_PAGE_SIZE = 7u;
 
@@ -75,6 +75,7 @@ layout(location = 2) noperspective in float fDepthLinear;
 layout(location = 3) smooth in float fDepthPerspective;
 layout(location = 4) flat in uvec4 fTriInfo0;
 layout(location = 5) flat in uvec4 fTriInfo1;
+layout(location = 6) flat in vec4 fTexcoordBounds;
 
 layout(location = 0) out vec4 oColor;
 #if MELONDS_COLOR_ONLY == 0
@@ -84,7 +85,24 @@ layout(location = 1) out vec4 oAttr;
 const uint TRI_FLAG_TEXTURED = 1u << 1u;
 const uint TRI_FLAG_DECAL = 1u << 2u;
 const uint TRI_FLAG_LINEAR = 1u << 6u;
-const float LINEAR_TEXEL_COORD_BIAS = 1.0 / 8.0;
+const uint TRI_FLAG_TEXCOORD_BOUNDS = 1u << 15u;
+const uint TRI_FLAG_INTEGRAL_TEXCOORD_PLANE = 1u << 16u;
+
+vec2 clampPolygonTexcoord(vec2 texcoord)
+{
+    if ((fTriInfo0.x & TRI_FLAG_TEXCOORD_BOUNDS) != 0u)
+    {
+        vec2 bounded = clamp(texcoord, fTexcoordBounds.xy, fTexcoordBounds.zw);
+        if ((fTriInfo0.x & TRI_FLAG_INTEGRAL_TEXCOORD_PLANE) != 0u
+            && any(notEqual(texcoord, bounded)))
+        {
+            float grid = float(pc.width) * (1.0 / 8.0);
+            bounded = round(bounded * grid) / grid;
+        }
+        return bounded;
+    }
+    return texcoord;
+}
 
 struct Color6A5
 {
@@ -253,69 +271,6 @@ bool usesCompactOpaqueDepthWritePaletteUi(uint flags, uint polyAttr, uint texPar
         && !mirrorT;
 }
 
-bool usesHighresOpaqueRepeatedModelTexture(uint flags, uint polyAttr, uint texParam)
-{
-    uint textureFormat = (texParam >> 26u) & 0x7u;
-    uint polyAlpha = (polyAttr >> 16u) & 0x1Fu;
-    uint blendMode = (polyAttr >> 4u) & 0x3u;
-    bool color0Transparent = (texParam & (1u << 29u)) != 0u;
-    bool repeatS = (texParam & (1u << 16u)) != 0u;
-    bool repeatT = (texParam & (1u << 17u)) != 0u;
-    bool mirrorS = (texParam & (1u << 18u)) != 0u;
-    bool mirrorT = (texParam & (1u << 19u)) != 0u;
-
-    return TRANSLUCENT_PASS == 0u
-        && (flags & TRI_FLAG_TEXTURED) != 0u
-        && (flags & TRI_FLAG_LINEAR) != 0u
-        && (textureFormat == 4u || textureFormat == 5u)
-        && !color0Transparent
-        && polyAlpha == 31u
-        && blendMode == 0u
-        && (repeatS || repeatT || mirrorS || mirrorT);
-}
-
-bool usesHighresLinearTextBand(uint flags, uint polyAttr, uint texParam, uint texWidth, uint texHeight)
-{
-    uint textureFormat = (texParam >> 26u) & 0x7u;
-    uint polyAlpha = (polyAttr >> 16u) & 0x1Fu;
-    uint blendMode = (polyAttr >> 4u) & 0x3u;
-    bool color0Transparent = (texParam & (1u << 29u)) != 0u;
-    bool depthWriteEnabled = (polyAttr & (1u << 11u)) != 0u;
-    bool depthWriteDisabled = (polyAttr & (1u << 11u)) == 0u;
-    bool repeatS = (texParam & (1u << 16u)) != 0u;
-    bool repeatT = (texParam & (1u << 17u)) != 0u;
-    bool mirrorS = (texParam & (1u << 18u)) != 0u;
-    bool mirrorT = (texParam & (1u << 19u)) != 0u;
-    bool observedTranslucentTextPage =
-        (texParam == 0x79df2000u && texWidth == 256u && texHeight == 64u)
-        || (texParam == 0x7a5f3000u && texWidth == 256u && texHeight == 128u)
-        || (texParam == 0x79df4800u && texWidth == 256u && texHeight == 64u);
-    bool observedOpaqueTextPage =
-        texParam == 0x71df2800u && texWidth == 256u && texHeight == 64u;
-
-    bool commonTextBand =
-        (flags & TRI_FLAG_TEXTURED) != 0u
-        && (flags & TRI_FLAG_LINEAR) != 0u
-        && color0Transparent
-        && blendMode == 0u
-        && repeatS
-        && repeatT
-        && mirrorS
-        && mirrorT;
-
-    return commonTextBand
-        && ((TRANSLUCENT_PASS != 0u
-                && textureFormat == 6u
-                && depthWriteDisabled
-                && polyAlpha == 30u
-                && observedTranslucentTextPage)
-            || (TRANSLUCENT_PASS == 0u
-                && textureFormat == 4u
-                && depthWriteEnabled
-                && polyAlpha == 31u
-                && observedOpaqueTextPage));
-}
-
 vec2 dsPixelCenterDelta()
 {
     vec2 renderScale = max(vec2(float(pc.width) * (1.0 / 256.0), float(pc.height) * (1.0 / 192.0)), vec2(1.0));
@@ -378,18 +333,10 @@ Color6A5 sampleTexture(uint polyAttr)
         vec2 centerDelta = dsPixelCenterDelta();
         texcoord += dFdx(fTexcoord) * centerDelta.x + dFdy(fTexcoord) * centerDelta.y;
     }
-    else if ((flags & TRI_FLAG_LINEAR) != 0u
-        && (repeatS || repeatT || mirrorS || mirrorT)
-        && !usesHighresOpaqueRepeatedModelTexture(flags, polyAttr, texParam)
-        && !usesHighresLinearTextBand(flags, polyAttr, texParam, texWidth, texHeight))
-    {
-        vec2 renderScale = max(vec2(float(pc.width) * (1.0 / 256.0), float(pc.height) * (1.0 / 192.0)), vec2(1.0));
-        vec2 subpixelOffset = mod(gl_FragCoord.xy - vec2(0.5), renderScale);
-        texcoord += dFdx(fTexcoord) * -subpixelOffset.x + dFdy(fTexcoord) * -subpixelOffset.y;
-        texcoord -= vec2(LINEAR_TEXEL_COORD_BIAS);
-    }
+
 #endif
 
+    texcoord = clampPolygonTexcoord(texcoord);
     int sampleS = int(floor(texcoord.x));
     int sampleT = int(floor(texcoord.y));
 
@@ -440,7 +387,7 @@ vec3 sampleFastNormalizedTexel()
     uint texArrayIndex = pc.variantKey & 0xFFFFu;
     uint texHeight = (pc.passIndex >> 16u) & 0xFFFFu;
     uint texWidth = pc.passIndex & 0xFFFFu;
-    vec2 sampledTexelCenter = floor(fTexcoord) + vec2(0.5);
+    vec2 sampledTexelCenter = floor(clampPolygonTexcoord(fTexcoord)) + vec2(0.5);
     vec2 sampledUv = sampledTexelCenter / vec2(float(texWidth), float(texHeight));
     vec4 normalizedTexel = texture(normTexArrays[texArrayIndex % TEXTURE_DESCRIPTOR_PAGE_SIZE], vec3(sampledUv, float(texLayer)));
     return clamp(normalizedTexel.rgb * 255.0, vec3(0.0), vec3(63.0));
@@ -482,8 +429,9 @@ void main()
         uint texArrayIndex = pc.variantKey & 0xFFFFu;
         uint texWidth = pc.passIndex & 0xFFFFu;
         uint texHeight = (pc.passIndex >> 16u) & 0xFFFFu;
-        int sampleS = int(floor(fTexcoord.x));
-        int sampleT = int(floor(fTexcoord.y));
+        vec2 texcoord = clampPolygonTexcoord(fTexcoord);
+        int sampleS = int(floor(texcoord.x));
+        int sampleT = int(floor(texcoord.y));
         vec2 sampledTexelCenter = vec2(float(sampleS) + 0.5, float(sampleT) + 0.5);
         vec2 sampledUv = sampledTexelCenter / vec2(float(texWidth), float(texHeight));
         vec4 normalizedTexel = texture(normTexArrays[texArrayIndex % TEXTURE_DESCRIPTOR_PAGE_SIZE], vec3(sampledUv, float(texLayer)));
@@ -642,7 +590,7 @@ void main()
 
         oColor = vec4(0.0);
 #if MELONDS_COLOR_ONLY == 0
-        oAttr = vec4(0.0, 1.0, 0.0, 1.0);
+        oAttr = vec4(0.0, 0.0, 1.0, 1.0);
 #endif
 
         float edgeDepth = DEPTH_INTERPOLATION_MODE != 0u ? fDepthPerspective : fDepthLinear;

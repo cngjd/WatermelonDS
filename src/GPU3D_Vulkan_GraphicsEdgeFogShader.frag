@@ -120,7 +120,7 @@ void main()
     vec3 edgeColor = vec3(0.0);
     int polyid = int(attr.r * 63.0);
 
-    if (attr.g > 0.75)
+    if (attr.b > 0.75)
     {
         vec4 depthU = texelFetch(DepthBuffer, coord + ivec2(0, -scale), 0);
         vec4 attrU = texelFetch(AttrBuffer, coord + ivec2(0, -scale), 0);

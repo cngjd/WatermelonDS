@@ -957,8 +957,8 @@ void SoftRenderer::CollectUnreferencedFaithfulCaptureProducts() noexcept
 
             state = 1u;
             stack.push_back({frame.Id, true, frame.Depth});
-            for (auto parentIt = record->DirectSourceBParents.rbegin();
-                 parentIt != record->DirectSourceBParents.rend(); ++parentIt)
+            for (auto parentIt = record->DirectCaptureParents.rbegin();
+                 parentIt != record->DirectCaptureParents.rend(); ++parentIt)
             {
                 const FaithfulCaptureProductParentKey& parentKey = *parentIt;
                 if (parentKey.Epoch == 0u || parentKey.Id == 0u
@@ -1182,51 +1182,54 @@ void SoftRenderer::PublishFaithfulCaptureProduct() noexcept
                 stagedRecipe.FullSourceAB.begin(),
                 stagedRecipe.FullSourceAB.end());
         }
-        record->DirectSourceBParents.reserve(4u);
+        record->SourceABackground = stagedRecipe.SourceABackground;
+        record->DirectCaptureParents.reserve(4u);
+        std::array<FaithfulCaptureProductParentKey, 4> smallKeys {};
+        size_t smallCount = 0u;
+        const auto addParent = [&](const FaithfulCaptureProductParentKey& key) {
+            bool seen = false;
+            for (size_t i = 0u; i < smallCount && !seen; i++)
+                seen = smallKeys[i] == key;
+            if (!seen && smallCount >= smallKeys.size())
+            {
+                seen = std::find(record->DirectCaptureParents.begin(),
+                           record->DirectCaptureParents.end(), key)
+                    != record->DirectCaptureParents.end();
+            }
+            if (seen)
+                return;
+            if (smallCount < smallKeys.size())
+                smallKeys[smallCount++] = key;
+            else
+                record->DirectCaptureParents.push_back(key);
+        };
         if (record->RecipeEncoding
             == FaithfulCaptureRecipeEncoding::FullSourceAB)
         {
-
-            std::array<FaithfulCaptureProductParentKey, 4> smallKeys {};
-            size_t smallCount = 0u;
             for (const auto& pixel : record->FullSourceABRecipe)
             {
                 const auto kind =
                     static_cast<FaithfulCaptureSourceBPixelKind>(
                         (pixel.SourceBValueKind >> 16u) & 0xFFu);
-                const bool exact =
-                    (pixel.SourceBValueKind & (1u << 24u)) != 0u;
-                if (!exact
-                    || kind
-                        != FaithfulCaptureSourceBPixelKind::CaptureProduct
-                    || pixel.SourceBProductEpoch != activeEpoch
-                    || pixel.SourceBProductId == 0u)
+                if ((pixel.SourceBValueKind & (1u << 24u)) != 0u
+                    && kind == FaithfulCaptureSourceBPixelKind::CaptureProduct
+                    && pixel.SourceBProductEpoch == activeEpoch
+                    && pixel.SourceBProductId != 0u)
                 {
-                    continue;
+                    addParent({pixel.SourceBProductEpoch,
+                               pixel.SourceBProductId});
                 }
-                const FaithfulCaptureProductParentKey key{
-                    pixel.SourceBProductEpoch, pixel.SourceBProductId};
-                bool seen = false;
-                for (size_t i = 0u; i < smallCount && !seen; i++)
-                    seen = smallKeys[i] == key;
-                if (!seen && smallCount >= smallKeys.size())
-                {
-                    seen = std::find(record->DirectSourceBParents.begin(),
-                               record->DirectSourceBParents.end(), key)
-                        != record->DirectSourceBParents.end();
-                }
-                if (seen)
-                    continue;
-                if (smallCount < smallKeys.size())
-                    smallKeys[smallCount++] = key;
-                else
-                    record->DirectSourceBParents.push_back(key);
             }
-            for (size_t i = 0u; i < smallCount; i++)
-                record->DirectSourceBParents.push_back(smallKeys[i]);
         }
-        std::sort(record->DirectSourceBParents.begin(),
-                  record->DirectSourceBParents.end());
+        for (const auto& operand : record->SourceABackground)
+        {
+            if (operand.ProductId != 0u)
+                addParent({activeEpoch, operand.ProductId});
+        }
+        for (size_t i = 0u; i < smallCount; i++)
+            record->DirectCaptureParents.push_back(smallKeys[i]);
+        std::sort(record->DirectCaptureParents.begin(),
+                  record->DirectCaptureParents.end());
         FaithfulCaptureProductRegistry.emplace(
             FaithfulCaptureProduct.ProductId, std::move(record));
     }
@@ -1853,7 +1856,7 @@ void SoftRenderer::StageFaithfulVisibleCaptureLine(
             && tag.ProductEpoch == 0u && tag.ProductId == 0u;
         allNativeTags = allNativeTags && nativeTag;
         allExplicitAmbiguous = allExplicitAmbiguous && tag.Ambiguous;
-        if (tag.Ambiguous
+        if (tag.Ambiguous || tag.Live3DBackground
             || tag.ProductEpoch == 0u || tag.ProductId == 0u
             || tag.StorageBank >= 9u
             || tag.SourceX > 0xFFu || tag.SourceY > 0xFFu)
@@ -1980,7 +1983,9 @@ void SoftRenderer::StageFaithfulVisibleCaptureLine(
             static_cast<u8>(tag.SourceX),
             static_cast<u8>(tag.SourceY));
         lineage.Control = FaithfulVisiblePixelLineage::PackControl(
-            FaithfulVisibleCompositeOp::Replace,
+            tag.Live3DBackground
+                ? FaithfulVisibleCompositeOp::Live3DOverCapture
+                : FaithfulVisibleCompositeOp::Replace,
             postEffect,
             false,
             false,
@@ -2248,8 +2253,16 @@ void SoftRenderer::FinalizeFaithfulVisiblePixelLineage() noexcept
         const FaithfulVisiblePostEffect postEffect =
             static_cast<FaithfulVisiblePostEffect>(postEffectBits);
         const u8 evy = static_cast<u8>((lineage.Control >> 18u) & 0x1Fu);
+        const auto op = static_cast<FaithfulVisibleCompositeOp>(
+            lineage.Control & 0x7u);
+        if (op != FaithfulVisibleCompositeOp::Replace
+            && op != FaithfulVisibleCompositeOp::Live3DOverCapture)
+        {
+            failAmbiguous(lineage);
+            return;
+        }
         lineage.Control = FaithfulVisiblePixelLineage::PackControl(
-            FaithfulVisibleCompositeOp::Replace,
+            op,
             postEffect,
             false,
             true,
@@ -4144,6 +4157,26 @@ void SoftRenderer::ResolveFaithfulCompositeTopTag(
         : FaithfulComposedCaptureTag::AmbiguityReason::None;
 }
 
+void SoftRenderer::ResolveFaithful3DBackgroundTag(
+    u32 x, u32 val2, u32 val3) noexcept
+{
+    if (!TrackFaithfulCaptureProduct || x >= kStructuredScreenWidth)
+        return;
+
+    const FaithfulComposedCaptureTag& background =
+        ComposedFaithfulCaptureTags[kStructuredScreenWidth + x];
+    if (!background.Ambiguous && !background.Live3DBackground
+        && background.ProductEpoch == GPU.GetFaithfulCaptureProductEpoch()
+        && background.ProductId != 0u && background.StorageBank < 9u
+        && FaithfulColorCompositePassesTopExactly(x, val2, val3))
+    {
+        ComposedFaithfulCaptureTags[x] = background;
+        ComposedFaithfulCaptureTags[x].Live3DBackground = true;
+        return;
+    }
+    MarkFaithfulCompositeTopAmbiguousIfCausal(x, 3u);
+}
+
 void SoftRenderer::MarkFaithfulCompositeTopAmbiguousIfCausal(
     u32 x, u32 laneCount) noexcept
 {
@@ -4366,6 +4399,7 @@ bool SoftRenderer::PrepareFaithfulCaptureRecipeSlot(
     FaithfulCaptureRecipeSlotStorage& slot =
         FaithfulCaptureProductRecipeSlots[
             FaithfulCaptureProductRecipeSlot];
+    slot.SourceABackground.clear();
     try
     {
         if (encoding == FaithfulCaptureRecipeEncoding::SourceAOnly)
@@ -4501,6 +4535,42 @@ void SoftRenderer::StageFaithfulCaptureProductRecipeLine(
 
     const size_t lineOffset =
         static_cast<size_t>(line) * kStructuredScreenWidth;
+    if (FaithfulPendingCaptureBackgroundPresent
+        || !slot->SourceABackground.empty())
+    {
+        try
+        {
+            slot->SourceABackground.resize(kStructuredPixelCount);
+            u64 cachedId = 0u;
+            FaithfulCaptureProductLease parent {};
+            for (u32 x = 0u; x < width; x++)
+            {
+                const auto& operand = FaithfulPendingCaptureBackgroundLine[x];
+                if (operand.ProductId == 0u)
+                    continue;
+                if (operand.ProductId != cachedId)
+                {
+                    cachedId = operand.ProductId;
+                    parent = AcquireFaithfulCaptureProduct(
+                        FaithfulCaptureProduct.ProductEpoch, cachedId);
+                }
+                FaithfulCaptureProductDependenciesExact =
+                    FaithfulCaptureProductDependenciesExact
+                    && parent != nullptr && parent->Metadata.Complete
+                    && (!parent->Metadata.Uses3d
+                        || parent->Metadata.HighresEligible)
+                    && (operand.Coordinates & 0xFFFFu) < parent->Metadata.Width
+                    && (operand.Coordinates >> 16u) < parent->Metadata.Height;
+            }
+            std::copy_n(FaithfulPendingCaptureBackgroundLine.data(), width,
+                        slot->SourceABackground.data() + lineOffset);
+        }
+        catch (const std::bad_alloc&)
+        {
+            FaithfulCaptureProductRecipeTupleCoherent = false;
+            return;
+        }
+    }
     if (expectedEncoding == FaithfulCaptureRecipeEncoding::SourceAOnly)
     {
         FaithfulCaptureSourceARecipe* const destination =
@@ -8045,6 +8115,23 @@ void SoftRenderer::DoCapture(u32 line, u32 width, u32 sourceLine)
                     && sourceLine < kStructuredScreenHeight));
         FaithfulPendingCaptureRecipeEncoding =
             ClassifyFaithfulCaptureRecipeEncoding(captureCnt);
+        FaithfulPendingCaptureBackgroundPresent = false;
+        const auto stageBackground = [&](u32 x) {
+            auto& operand = FaithfulPendingCaptureBackgroundLine[x];
+            operand = {};
+            if (!TrackFaithfulCaptureProduct || captureUsesDirect3D
+                || !sourceAContributes)
+                return;
+            const auto& tag = ComposedFaithfulCaptureTags[x];
+            if (!tag.Live3DBackground || tag.Ambiguous
+                || tag.ProductEpoch != GPU.GetFaithfulCaptureProductEpoch()
+                || tag.ProductId == 0u)
+                return;
+            operand.ProductId = tag.ProductId;
+            operand.Coordinates = static_cast<u32>(tag.SourceX)
+                | (static_cast<u32>(tag.SourceY) << 16u);
+            FaithfulPendingCaptureBackgroundPresent = true;
+        };
         if (FaithfulPendingCaptureRecipeExact)
         {
             if (FaithfulPendingCaptureRecipeEncoding
@@ -8052,6 +8139,7 @@ void SoftRenderer::DoCapture(u32 line, u32 width, u32 sourceLine)
             {
                 for (u32 x = 0u; x < width; x++)
                 {
+                    stageBackground(x);
                     FaithfulPendingCaptureSourceALine[x] = {
                         BGOBJLine[x],
                         BGOBJLine[kStructuredScreenWidth + x],
@@ -8064,6 +8152,7 @@ void SoftRenderer::DoCapture(u32 line, u32 width, u32 sourceLine)
             {
                 for (u32 x = 0u; x < width; x++)
                 {
+                    stageBackground(x);
                     FaithfulPendingCaptureFullSourceABLine[x] = {
                         BGOBJLine[x],
                         BGOBJLine[kStructuredScreenWidth + x],
@@ -9730,16 +9819,16 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
 
                     if (((flag1 & 0xC0) == 0x40) && (CurUnit->BlendCnt & target2))
                     {
-                        MarkFaithfulCompositeTopAmbiguousIfCausal(
-                            static_cast<u32>(i), 3u);
+                        ResolveFaithful3DBackgroundTag(
+                            static_cast<u32>(i), val2, val3);
                         BGOBJLine[i]     = val2;
                         BGOBJLine[256+i] = ColorComposite(i, val2, val3);
                         BGOBJLine[512+i] = 0x04000000;
                     }
                     else if ((flag1 & 0xC0) == 0x40)
                     {
-                        MarkFaithfulCompositeTopAmbiguousIfCausal(
-                            static_cast<u32>(i), 3u);
+                        ResolveFaithful3DBackgroundTag(
+                            static_cast<u32>(i), val2, val3);
                         if (bldcnteffect == 1)             bldcnteffect = 0;
                         if (!(CurUnit->BlendCnt & 0x0001)) bldcnteffect = 0;
                         if (!(WindowMask[i] & 0x20))       bldcnteffect = 0;
@@ -10155,8 +10244,8 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
                 {
                     // 3D on top, blending
 
-                    MarkFaithfulCompositeTopAmbiguousIfCausal(
-                        static_cast<u32>(i), 3u);
+                    ResolveFaithful3DBackgroundTag(
+                        static_cast<u32>(i), val2, val3);
                     BGOBJLine[i]     = val2;
                     BGOBJLine[256+i] = ColorComposite(i, val2, val3);
                     BGOBJLine[512+i] = 0x04000000;
@@ -10165,8 +10254,8 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
                 {
                     // 3D on top, normal/fade
 
-                    MarkFaithfulCompositeTopAmbiguousIfCausal(
-                        static_cast<u32>(i), 3u);
+                    ResolveFaithful3DBackgroundTag(
+                        static_cast<u32>(i), val2, val3);
                     if (bldcnteffect == 1)             bldcnteffect = 0;
                     if (!(CurUnit->BlendCnt & 0x0001)) bldcnteffect = 0;
                     if (!(WindowMask[i] & 0x20))       bldcnteffect = 0;
@@ -11632,17 +11721,6 @@ void SoftRenderer::DrawSpritesActivePipeline(u32 line, Unit* unit)
         if (UseFaithfulVulkan2D()) AcumularFielDirty(FaithfulDirty.BOBJ, objDirty);
         GPU.MakeVRAMFlat_BOBJCoherent(objDirty);
     }
-
-    static const bool c5dSinSprites =
-        std::getenv("MELON_C5D_APAGADO") == nullptr;
-    const bool faithfulMappedObjHasCaptureTags =
-        TrackSpriteFaithfulCaptureProduct
-        && GPU.HasFaithfulVramCaptureTags(
-            FaithfulMappedObjPhysicalBankMask(CurUnit->Num));
-    if (c5dSinSprites && UseFaithfulVulkan2D() && CurUnit->Num != 0
-        && !FaithfulComponerActivo[1]
-        && !faithfulMappedObjHasCaptureTags)
-        return;
 
     u16* oam = (u16*)&GPU.OAM[CurUnit->Num ? 0x400 : 0];
 

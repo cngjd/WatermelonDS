@@ -209,7 +209,8 @@ private:
     static constexpr u32 TextureDescriptorStorageCapacity =
         GetVulkanTextureDescriptorPolicy().TextureDescriptorCount;
     static_assert(
-        TextureDescriptorStorageCapacity == 256u);
+        GetVulkanTextureDescriptorPolicy().MaxActiveTextureDescriptors()
+            == std::tuple_size<decltype(GPU3D::RenderPolygonRAM)>::value);
     static constexpr u32 GraphicsTextureDescriptorPageCount =
         GetVulkanTextureDescriptorPolicy().TextureDescriptorPageCount();
     static constexpr u32 TextureDescriptorPageStorageCapacity =
@@ -403,6 +404,7 @@ private:
         u32 texHeight;
         u32 texParam;
         u32 polyAttr;
+        std::array<s16, 4> texcoordBounds;
     };
 
 
@@ -698,7 +700,6 @@ private:
     std::array<VkPipeline, GraphicsOpaquePipelineCount> GraphicsOpaqueFastModulateOpaqueAlphaToonOcclusionNoAttrPipelines{};
     std::array<VkPipeline, GraphicsOpaquePipelineCount> GraphicsOpaqueFastModulateOpaqueAlphaPlainPipelines{};
     std::array<VkPipeline, GraphicsOpaquePipelineCount> GraphicsOpaqueFastModulateOpaqueAlphaPlainNoAttrPipelines{};
-    std::array<VkPipeline, GraphicsOpaquePipelineCount> GraphicsOpaqueFastModulateOpaqueAlphaPlainNoDepthNoAttrPipelines{};
     std::array<VkPipeline, GraphicsOpaquePipelineCount> GraphicsOpaqueFastModulateOpaqueAlphaPlainColorOnlyPipelines{};
     std::array<VkPipeline, GraphicsOpaquePipelineCount> GraphicsOpaqueFastModulateOpaqueAlphaPlainOcclusionNoAttrPipelines{};
     std::array<VkPipeline, GraphicsOpaquePipelineCount> GraphicsOpaqueFastModulateOpaqueAlphaPlainNoDepthOcclusionNoAttrPipelines{};

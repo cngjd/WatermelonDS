@@ -5,6 +5,7 @@ layout(location = 1) in vec2 vTexcoord;
 layout(location = 2) in uvec4 vColor;
 layout(location = 3) in uvec4 vTriInfo0In;
 layout(location = 4) in uvec3 vTriInfo1In;
+layout(location = 5) in ivec4 vTexcoordBounds;
 
 layout(push_constant) uniform PushConsts
 {
@@ -33,6 +34,7 @@ layout(location = 2) noperspective out float fDepthLinear;
 layout(location = 3) smooth out float fDepthPerspective;
 layout(location = 4) flat out uvec4 fTriInfo0;
 layout(location = 5) flat out uvec4 fTriInfo1;
+layout(location = 6) flat out vec4 fTexcoordBounds;
 
 void main()
 {
@@ -61,4 +63,5 @@ void main()
     fTexcoord = vTexcoord * (1.0 / 16.0);
     fTriInfo0 = vTriInfo0In;
     fTriInfo1 = uvec4(vTriInfo1In, 0u);
+    fTexcoordBounds = vec4(vTexcoordBounds) * (1.0 / 16.0);
 }

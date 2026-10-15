@@ -4811,7 +4811,7 @@ void SPU::UpdateOutputAdaptivo(u64 hostConsumed, u64 ticksAlConsumo,
     const bool ventanaFast = deltaFastCons >= ventanaRate
                           && deltaFastTicks >= ticksDosFrames;
     const bool urgenciaFast = nivelPostEscritura >= nivelAlto
-                           && deltaFastCons > 0
+                           && deltaFastCons >= (OutputTempo ? ventanaRate : 1)
                            && deltaFastTicks >= ticksDosFrames;
     const bool ventanaFastPublicable = deltaFastCons >= ventanaRate
                                     && deltaFastTicks

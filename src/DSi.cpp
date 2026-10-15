@@ -424,7 +424,7 @@ void DSi::SetupDirectBoot()
     // TODO properly setup SCFG_EXT
 
     // TODO: add controls for forcing DS or DSi mode?
-    if (!(header.UnitCode & 0x02))
+    if (!NDSCartSlot.GetCart()->IsDSiCapable())
         dsmode = true;
 
     if (dsmode)

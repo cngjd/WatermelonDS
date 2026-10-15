@@ -108,6 +108,7 @@ public:
     [[nodiscard]] const NDSBanner* Banner() const;
     [[nodiscard]] const ROMListEntry& GetROMParams() const { return ROMParams; };
     [[nodiscard]] u32 ID() const { return ChipID; }
+    [[nodiscard]] bool IsDSiCapable() const { return IsDSi; }
     [[nodiscard]] const u8* GetROM() const { return ROM.get(); }
     [[nodiscard]] u32 GetROMLength() const { return ROMLength; }
 protected:

@@ -163,7 +163,7 @@ struct VulkanTextureDescriptorPolicy
 };
 
 inline constexpr VulkanTextureDescriptorPolicy VulkanProductionTextureDescriptorPolicy{
-    256u,
+    2049u,
     true,
 };
 
@@ -173,15 +173,19 @@ inline constexpr VulkanTextureDescriptorPolicy VulkanProductionTextureDescriptor
 }
 
 static_assert(
-    GetVulkanTextureDescriptorPolicy().TextureDescriptorCount == 256u);
+    GetVulkanTextureDescriptorPolicy().TextureDescriptorCount == 2049u);
 static_assert(
-    GetVulkanTextureDescriptorPolicy().MaxActiveTextureDescriptors() == 255u);
+    GetVulkanTextureDescriptorPolicy().MaxActiveTextureDescriptors() == 2048u);
 static_assert(
-    GetVulkanTextureDescriptorPolicy().FallbackTextureDescriptorIndex() == 255u);
+    GetVulkanTextureDescriptorPolicy().FallbackTextureDescriptorIndex() == 2048u);
 static_assert(
     GetVulkanTextureDescriptorPolicy().ResolveDescriptorIndex(128u) == 128u);
 static_assert(
-    GetVulkanTextureDescriptorPolicy().ResolveDescriptorIndex(254u) == 254u);
+    GetVulkanTextureDescriptorPolicy().ResolveDescriptorIndex(2047u) == 2047u);
+static_assert(
+    GetVulkanTextureDescriptorPolicy().ResolveDescriptorIndex(2048u) == 2048u);
+static_assert(
+    GetVulkanTextureDescriptorPolicy().ResolveDescriptorIndex(4096u) == 2048u);
 static_assert(
     GetVulkanTextureDescriptorPolicy().UsesNormalizedTextureDescriptors);
 static_assert(
@@ -189,11 +193,11 @@ static_assert(
 static_assert(
     GetVulkanTextureDescriptorPolicy().GraphicsCombinedImageSamplerCount() == 16u);
 static_assert(
-    GetVulkanTextureDescriptorPolicy().TextureDescriptorPageCount() == 37u);
+    GetVulkanTextureDescriptorPolicy().TextureDescriptorPageCount() == 293u);
 static_assert(
-    GetVulkanTextureDescriptorPolicy().TextureDescriptorPageIndex(255u) == 36u);
+    GetVulkanTextureDescriptorPolicy().TextureDescriptorPageIndex(2048u) == 292u);
 static_assert(
-    GetVulkanTextureDescriptorPolicy().TextureDescriptorPageOffset(255u) == 3u);
+    GetVulkanTextureDescriptorPolicy().TextureDescriptorPageOffset(2048u) == 4u);
 static_assert(
     GetVulkanTextureDescriptorPolicy().GraphicsCombinedImageSamplerCountFor(7u) == 16u);
 static_assert(

@@ -176,6 +176,16 @@ public:
     static_assert(std::is_trivially_copyable_v<FaithfulCaptureSourceARecipe>);
     static_assert(std::is_standard_layout_v<FaithfulCaptureSourceARecipe>);
 
+    struct alignas(16) FaithfulCaptureBackgroundOperand
+    {
+        u64 ProductId = 0;
+        u32 Coordinates = 0;
+        u32 Slot = 0;
+    };
+    static_assert(sizeof(FaithfulCaptureBackgroundOperand) == 16u);
+    static_assert(std::is_trivially_copyable_v<FaithfulCaptureBackgroundOperand>);
+    static_assert(std::is_standard_layout_v<FaithfulCaptureBackgroundOperand>);
+
     enum class FaithfulCaptureRecipeEncoding : u8
     {
         FullSourceAB = 0,
@@ -261,8 +271,9 @@ public:
 
         std::vector<FaithfulCaptureSourceARecipe> SourceARecipe {};
         std::vector<FaithfulCapturePixelRecipe> FullSourceABRecipe {};
+        std::vector<FaithfulCaptureBackgroundOperand> SourceABackground {};
 
-        std::vector<FaithfulCaptureProductParentKey> DirectSourceBParents {};
+        std::vector<FaithfulCaptureProductParentKey> DirectCaptureParents {};
     };
     using FaithfulCaptureProductLease =
         std::shared_ptr<const FaithfulCaptureProductRecord>;
@@ -312,6 +323,7 @@ public:
         Blend5 = 2,
         Blend16 = 3,
         Ambiguous = 4,
+        Live3DOverCapture = 5,
     };
 
     enum class FaithfulVisiblePostEffect : u8
@@ -690,6 +702,7 @@ private:
 
         bool Ambiguous = false;
         AmbiguityReason Reason = AmbiguityReason::None;
+        bool Live3DBackground = false;
     };
 
     static constexpr size_t kStructuredScreenWidth = 256;
@@ -819,6 +832,7 @@ private:
         u32 x, u32 val1, u32 val2) const noexcept;
     void ResolveFaithfulCompositeTopTag(
         u32 x, u32 val1, u32 val2) noexcept;
+    void ResolveFaithful3DBackgroundTag(u32 x, u32 val2, u32 val3) noexcept;
     void MarkFaithfulCompositeTopAmbiguousIfCausal(
         u32 x, u32 laneCount) noexcept;
     void ExportFaithfulCaptureLineProduct(
@@ -1077,6 +1091,7 @@ private:
             FaithfulCaptureRecipeEncoding::FullSourceAB;
         std::vector<FaithfulCaptureSourceARecipe> SourceA {};
         std::vector<FaithfulCapturePixelRecipe> FullSourceAB {};
+        std::vector<FaithfulCaptureBackgroundOperand> SourceABackground {};
     };
     std::array<FaithfulCaptureRecipeSlotStorage, 2>
         FaithfulCaptureProductRecipeSlots {};
@@ -1084,6 +1099,9 @@ private:
         kStructuredScreenWidth> FaithfulPendingCaptureSourceALine {};
     std::array<FaithfulCapturePixelRecipe,
         kStructuredScreenWidth> FaithfulPendingCaptureFullSourceABLine {};
+    std::array<FaithfulCaptureBackgroundOperand,
+        kStructuredScreenWidth> FaithfulPendingCaptureBackgroundLine {};
+    bool FaithfulPendingCaptureBackgroundPresent = false;
     FaithfulCaptureRecipeEncoding FaithfulPendingCaptureRecipeEncoding =
         FaithfulCaptureRecipeEncoding::FullSourceAB;
     u8 FaithfulCaptureProductRecipeSlot = 0u;
