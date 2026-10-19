@@ -14298,6 +14298,10 @@ void VulkanRenderer3D::buildGraphicsTriangleList(GPU& gpu, bool usePreparedGeome
 
     const auto linearTexcoordPlaneFor = [&](const AcceleratedSceneDraw& draw) -> std::optional<LinearTexcoordPlane> {
         const Polygon* polygon = draw.SourcePolygon;
+        // WideMelon: the plane is built in native 256-wide screen space, but widescreen rasterizes in wide space
+        // (MapAcceleratedFixedXToWide), so keep the regular texcoord interpolation there
+        if (WideMelon::Enabled())
+            return std::nullopt;
         if (polygon == nullptr
             || polygon->NumVertices < 3u || polygon->NumVertices > std::size(polygon->Vertices)
             || draw.VertexCount < 3u || draw.FirstVertex >= SharedGraphicsScene.Vertices.size()
